@@ -425,7 +425,8 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
       if (before !== undefined && before.text === '') before.width += 1
       else runs.push({ text: '', ink: { color: OFF }, width: 1 })
     }
-    for (let x = 0; x < width; x++) {
+    // The ember may run on into the room right of the last column, so a dot there is not cut off.
+    for (let x = 0; x < width + props.gutter; x++) {
       // The dot itself is large: it takes the cell either side of its own, and nothing else goes there.
       if (dot !== null && y === dot.y && x === dot.x - 1) {
         runs.push({
@@ -438,7 +439,7 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
       }
       const col = Math.floor(x / cell)
       const glow = ember(x, y)
-      if (model !== undefined && x === centre(col)) {
+      if (model !== undefined && col < cols && x === centre(col)) {
         const isLit = (drag ?? hover)?.row === row && (drag ?? hover)?.col === col
         const ink: Ink =
           col > model.max ? { color: OFF } : isLit ? { color: TEXT } : glow !== null ? { color: glow.ink.color } : { color: QUIET }

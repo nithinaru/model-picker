@@ -157,7 +157,8 @@ export const layoutFor = (bodyColumns: number, bodyRows: number, rows: number, i
   const cell = Math.max(3, Math.min(9, Math.floor((inner - labelWidth - 3) / EFFORTS.length)))
   // A name's box has a cell for each character, odd or even as the cell is, so both share a centre.
   const boxOf = (name: string) => ((name.length - cell) % 2 === 0 ? name.length : name.length + 1)
-  const gutter = Math.max(0, Math.ceil((boxOf(EFFORTS.at(-1)?.label ?? '') - cell) / 2))
+  const nameRoom = Math.max(0, Math.ceil((boxOf(EFFORTS.at(-1)?.label ?? '') - cell) / 2))
+  const gutter = Math.max(nameRoom, Math.min(6 - Math.floor(cell / 2), inner - labelWidth - cell * EFFORTS.length))
   const field = labelWidth + cell * EFFORTS.length + gutter
   const lay = (names: readonly string[], lines: number): Slot[][] | null => {
     const head: Slot[][] = []
