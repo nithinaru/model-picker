@@ -405,9 +405,13 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     const time = (beat * STEP_MS) / 1000
     const born = time / 0.5
     const spark = hash(x, y, Math.floor(born)) < 0.05 ? Math.sin(Math.PI * (born - Math.floor(born))) : 0
-    const warm = hot + (1 - hot) * (0.13 * Math.sin(Math.hypot(dx, dy) * 1.15 - time * 5.2) + 0.45 * spark)
-    // The mark is fixed by where the cell sits in the ember; only its colour moves.
-    const text = glyphFor(Math.min(LEVELS - 1, Math.floor(hot * LEVELS)), dx, dy)
+    const warm = hot + (1 - hot) * (0.16 * Math.sin(Math.hypot(dx, dy) * 1.15 - time * 5.2) + 0.45 * spark)
+    // The mark is set by where the cell sits in the ember. At rest, now and then
+    // one or two marks step to their nearest neighbour for a moment and back.
+    const level = Math.min(LEVELS - 1, Math.floor(hot * LEVELS))
+    const isStill = tail === null || apart(tail, origin) < 0.3
+    const turn = isStill && level < LEVELS - 2 ? hash(x * 3 + 1, y * 5 + 2, Math.floor(time / 0.9)) : 1
+    const text = glyphFor(clamp(level + (turn < 0.015 ? 1 : turn < 0.03 ? -1 : 0), 0, LEVELS - 1), dx, dy)
 
     return { text, ink: inkAt(clamp(warm, 0, 1)) }
   }
