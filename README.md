@@ -4,6 +4,8 @@ Pick Claude Code's model and effort level on a grid, with one dot.
 
 ![Dragging the dot across models and effort levels; the ember around it changes colour with the effort](assets/demo.gif)
 
+[Watch the 18-second launch video](assets/launch.mp4)
+
 ## Install
 
 In Claude Code:
@@ -38,6 +40,7 @@ claude plugin test .
 claude --plugin-dir .
 ./tools/preview.sh   # draws every state to tools/out/preview.png
 ./tools/demo.sh      # rebuilds assets/demo.gif
+./tools/video/film.sh  # rebuilds assets/launch.mp4
 ```
 
 MIT licensed. Not affiliated with Anthropic.
