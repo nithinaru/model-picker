@@ -61,33 +61,27 @@ const draw = (node: Node): string => {
 
 const main = async () => {
   const { default: Grid } = (await import('../hooks/grid.tsx')) as { default: (props: unknown, surface: unknown) => Node }
+  const efforts = ['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max', 'Ultracode']
+    .map((label, index) => ({ key: label.toLowerCase().replace('extra high', 'xhigh'), label, index }))
+    .reverse()
   const MAIN = [
-    { key: 'opus-5-5', label: 'Opus 5.5', max: 6, isOlder: false },
-    { key: 'fable-5-2', label: 'Fable 5.2', max: 6, isOlder: false },
-    { key: 'sonnet-5-5', label: 'Sonnet 5.5', max: 3, isOlder: false },
-    { key: 'haiku-5-5', label: 'Haiku 5.5', max: 0, isOlder: false },
+    { key: 'fable-5-2', label: 'Fable 5.2', max: 6 },
+    { key: 'opus-5-5', label: 'Opus 5.5', max: 6 },
+    { key: 'sonnet-5-5', label: 'Sonnet 5.5', max: 3 },
+    { key: 'haiku-5-5', label: 'Haiku 5.5', max: 0 },
   ]
   const OLDER = [
-    { key: 'sonnet-5', label: 'Sonnet 5', max: 3, isOlder: true },
-    { key: 'opus-5', label: 'Opus 5', max: 4, isOlder: true },
-    { key: 'fable-5', label: 'Fable 5', max: 4, isOlder: true },
-    { key: 'opus-4-8', label: 'Opus 4.8', max: 4, isOlder: true },
-    { key: 'opus-4-7', label: 'Opus 4.7', max: 4, isOlder: true },
-    { key: 'opus-4-6', label: 'Opus 4.6', max: 3, isOlder: true },
-    { key: 'sonnet-4-6', label: 'Sonnet 4.6', max: 3, isOlder: true },
+    { key: 'sonnet-5', label: 'Sonnet 5', max: 3 },
+    { key: 'opus-5', label: 'Opus 5', max: 4 },
+    { key: 'fable-5', label: 'Fable 5', max: 4 },
+    { key: 'opus-4-8', label: 'Opus 4.8', max: 4 },
   ]
-  const cols = ['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max', 'Ultracode']
-  const shortCols = ['Def', 'Low', 'Med', 'High', 'Extra', 'Max', 'Ultra']
-  const SET = 'Set. Your next prompt uses it.'
-  const RAN = 'Last answer came from Fable 5.2.'
-  const hints = ["Keeps the session's effort level.", '', '', '', '', '', 'Max effort plus the ultracode keyword.']
-  type Shot = { state?: unknown; page?: string; caption?: string; mono?: boolean }
-  const shot = (title: string, over: Record<string, unknown>, { state, page = '#FFFFFF', caption = RAN, mono = false }: Shot = {}) => {
-    inks = (page === '#FFFFFF' ? INKS.light : INKS.dark) ?? {}
-    const props = {
-      rows: MAIN, cols, shortCols, hints, at: { row: 1, col: 2 }, isOn: true, isExpanded: false,
-      moreCount: OLDER.length, labelWidth: 12, cell: 5, gutter: 3, isMono: mono, ...over,
-    }
+  const THEME: Record<string, Record<string, string>> = {
+    '#FFFFFF': { text: '#141413', inactive: '#73726C', subtle: '#D1CFC5', claude: '#C6613F' },
+    '#262624': { text: '#FAF9F5', inactive: '#9C9A92', subtle: '#4A4945', claude: '#D97757' },
+  }
+  const shot = (title: string, over: Record<string, unknown>, state?: unknown, page = '#FFFFFF') => {
+    const props = { efforts, models: MAIN, at: { row: 4, col: 0 }, isOn: true, page: 0, pages: 3, labelWidth: 11, cell: 11, isMono: false, ...over }
     const surface = {
       elements: { Box: 'Box', Text: 'Text' },
       state,
@@ -97,45 +91,28 @@ const main = async () => {
       onPointer: () => () => undefined,
       onKey: () => () => undefined,
     }
-    const ink = page === '#FFFFFF' ? '#73726C' : '#9C9A92'
-    const face = mono ? `font-family:Menlo,monospace;font-size:${CW / 0.602}px` : ''
+    const ink = THEME[page] ?? {}
+    const html = draw(Grid(props, surface)).replace(/color:(text|inactive|subtle|claude)/g, (_, key: string) => `color:${ink[key]}`)
+    const face = props.isMono ? `font-family:'SF Mono',Menlo,monospace;font-size:12.5px` : ''
 
     return `<section style="background:${page};padding:20px 22px 22px;border:1px solid #DEDCD1">
-      <div style="font:600 12px -apple-system;color:${ink};margin-bottom:12px">${esc(title)}</div>
-      <div style="display:inline-block;${face}">${draw(Grid(props, surface))}</div>
-      <div style="font:13px -apple-system;color:${ink};margin-top:14px;max-width:${(props.labelWidth + props.cell * 7 + props.gutter) * CW}px">${esc(caption)}</div>
+      <div style="font:600 12px -apple-system;color:${ink.inactive};margin-bottom:14px">${esc(title)}</div>
+      <div style="display:inline-block;${face}">${html}</div>
     </section>`
   }
-  const idle = { hover: null, foot: null, focus: null, tick: 1 }
+  const tick = (n: number) => ({ hover: null, foot: null, tick: n })
   const pages = [
-    shot('1. Picked: Fable 5.2 at Medium (light app theme, cell 6: the pane above the prompt)', { cell: 6 }),
-    shot('2. Hovering Opus 5.5 at Ultracode: its hint', { cell: 6 }, { state: { ...idle, hover: { row: 0, col: 6 } } }),
-    shot('3. Picked: Opus 5.5 at Ultracode (dark app theme)', { cell: 6, at: { row: 0, col: 6 } }, {
-      page: '#262624',
-      caption: `Ultracode sends Max effort and adds the word ultracode to each prompt. ${SET}`,
-    }),
-    shot('4. Untouched: follows the session', { cell: 6, isOn: false, at: { row: 2, col: 3 } }, {
-      caption: 'Following the session. Click a cell or drag the dot to choose a model and effort.',
-    }),
-    shot('5. More models unfolded, hovering Fewer models', { cell: 6, rows: [...MAIN, ...OLDER], isExpanded: true, moreCount: 0 }, {
-      state: { ...idle, foot: 'more' },
-    }),
-    shot('6. Narrow pane (cell 3)', { cell: 3 }),
-    shot('7. Names on one line (cell 8), arrow keys on Use session model', { cell: 8 }, { state: { ...idle, focus: 'reset' } }),
-    shot('8. Wide pane (cell 11), dark app theme', { cell: 11 }, { page: '#262624' }),
-    shot('9. Terminal, one cell per character (cell 5)', { cell: 5 }, { mono: true, page: '#262624' }),
-    shot('10. Terminal, light theme (cell 6)', { cell: 6, at: { row: 0, col: 4 } }, { mono: true }),
-    shot('11. Session model with no row: no dot', { cell: 6, isOn: false, at: { row: -1, col: -1 } }, {
-      caption: 'Following the session on claude-opus-6, which has no row here. Click a cell or drag the dot to choose a model and effort.',
-    }),
-    shot('12. Two-line names at their tightest (cell 5)', { cell: 5, at: { row: 0, col: 4 } }),
+    shot('1. Picked: Fable 5.2 at Medium, at rest (light)', {}, tick(1)),
+    shot('2. Same, the next glimmer step', {}, tick(2)),
+    shot('3. Picked: Opus 5.5 at Ultracode (dark)', { at: { row: 0, col: 1 } }, tick(1), '#262624'),
+    shot('4. Picked: Sonnet 5.5 at High, hovering Opus 5.5 at Max (dark)', { at: { row: 3, col: 2 } }, { hover: { row: 1, col: 1 }, foot: null, tick: 3 }, '#262624'),
+    shot('5. Untouched: follows the session, no ember', { isOn: false, at: { row: 4, col: 0 } }, tick(1)),
+    shot('6. Older models, second page', { models: OLDER, page: 1, at: { row: 2, col: 1 } }, tick(1)),
+    shot('7. Narrow pane (cell 7)', { cell: 7 }, tick(1)),
+    shot('8. Terminal (one cell per character)', { isMono: true }, tick(1), '#262624'),
   ]
   console.log(`<!doctype html><meta charset="utf-8"><body style="margin:0;background:#F5F4ED;font:13px/${RH}px -apple-system,'SF Pro Text',sans-serif">
-  <div style="display:flex;flex-wrap:wrap;gap:20px;padding:24px;align-items:flex-start">${pages.join('')}</div>
-  <script>for (const t of document.querySelectorAll('[data-text]')) {
-    const box = t.parentElement
-    if (t.scrollWidth > t.clientWidth + 1 || t.getBoundingClientRect().height > ${RH} + 1 || t.getBoundingClientRect().width > box.getBoundingClientRect().width + 0.5) t.style.outline = '1px solid red'
-  }</script></body>`)
+  <div style="display:flex;flex-wrap:wrap;gap:20px;padding:24px;align-items:flex-start">${pages.join('')}</div></body>`)
 }
 
 void main()

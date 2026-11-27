@@ -8,15 +8,15 @@ const STORE_KEY = 'choice-4'
 const KEYWORD = 'ultracode'
 // Opened by the button, so it asks for the seat above the prompt. The columns
 // are what a dock needs for the effort names to sit on one line.
-const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true, columns: 80 } as const
+const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true, columns: 60, rows: 13 } as const
 
 // The model rows, in the order of the app's own menu. `max` is the last effort
 // column the model may use; `isOlder` rows stay folded behind "More models".
 // The mod API lists neither models nor their levels, so both are kept here by
 // hand. Every id is one the Claude API's published model list carries.
 const MODELS = [
-  { key: 'opus-5-5', label: 'Opus 5.5', id: 'claude-opus-5-5', family: 'opus', max: 6, isOlder: false },
   { key: 'fable-5-2', label: 'Fable 5.2', id: 'claude-fable-5-2', family: 'fable', max: 6, isOlder: false },
+  { key: 'opus-5-5', label: 'Opus 5.5', id: 'claude-opus-5-5', family: 'opus', max: 6, isOlder: false },
   { key: 'sonnet-5-5', label: 'Sonnet 5.5', id: 'claude-sonnet-5-5', family: 'sonnet', max: 3, isOlder: false },
   { key: 'haiku-5-5', label: 'Haiku 5.5', id: 'claude-haiku-5-5', family: 'haiku', max: 0, isOlder: false },
   { key: 'sonnet-5', label: 'Sonnet 5', id: 'claude-sonnet-5', family: null, max: 3, isOlder: true },
@@ -60,8 +60,8 @@ const seen = atom(
 
 const view = atom(
   { plugin: 'model-picker', key: 'view' } as const,
-  { isExpanded: false, ran: null, kept: null } as View,
-  { shape: 'view-2' },
+  { page: 0, ran: null } as View,
+  { shape: 'view-3' },
 )
 
 const modelOf = (key: string) => MODELS.find(model => model.key === key) ?? MODELS[0]
@@ -129,31 +129,19 @@ const isChoice = (value: unknown): value is Choice => {
   )
 }
 
-/** What the pane shows: the model the dot is on (null when the session's has no row) and the rows drawn. */
-const drawn = async ($: EngineInterface) => {
-  const now = await read($, choice)
-  const session = await read($, seen)
-  const showing = await read($, view)
-  // Until a cell is picked, the dot sits where the session already is.
-  const modelKey = now.isOn ? now.model : modelRowFor(session.model)
-  // An older model that is the pick is shown whether or not the rest are, and
-  // stays in sight after the dot moves off it.
-  const rows = MODELS.filter(
-    one => !one.isOlder || showing.isExpanded || one.key === modelKey || one.key === showing.kept,
-  )
+// Model columns per page: the current models first, older ones on the pages after.
+const PER_PAGE = 4
+const PAGES = [
+  MODELS.filter(one => !one.isOlder),
+  ...Array.from({ length: Math.ceil(MODELS.filter(one => one.isOlder).length / PER_PAGE) }, (_, i) =>
+    MODELS.filter(one => one.isOlder).slice(i * PER_PAGE, (i + 1) * PER_PAGE),
+  ),
+]
+const pageOf = (key: string | null) => Math.max(0, PAGES.findIndex(page => page.some(one => one.key === key)))
+// Effort rows, top to bottom: the most effort on top, so up means more.
+const ROWS = EFFORTS.map((one, index) => ({ key: one.key, label: one.label, index })).reverse()
 
-  return { now, session, showing, modelKey, rows }
-}
-
-/**
- * The rows the pane needs for what is drawn: two lines of names and a blank
- * one, the models (a current one takes two rows), the hint and footer lines,
- * then a gap and two lines of caption.
- */
-const rowsFor = (rows: readonly { isOlder: boolean }[]) =>
-  3 + rows.reduce((sum, one) => sum + (one.isOlder ? 1 : 2), 0) + (rows.at(-1)?.isOlder === true ? 1 : 0) + 2 + 3
-
-const open = async ($: EngineInterface) => $.ui.open({ ...OPEN, rows: rowsFor((await drawn($)).rows) })
+const open = async ($: EngineInterface) => $.ui.open(OPEN)
 
 const describe = (now: Choice) => `${modelOf(now.model).label} · ${effortOf(now.effort).label}`
 
@@ -190,6 +178,10 @@ export const register: Register = on => {
     if (isChoice(kept) && MODELS.some(one => one.key === kept.model)) await update($, choice, () => kept)
     const model = await $.session.model().catch(() => null)
     if (model !== null) await update($, seen, was => ({ ...was, model }))
+    // Open on the page that holds the dot.
+    const now = await read($, choice)
+    const page = pageOf(now.isOn ? now.model : modelRowFor(model))
+    await update($, view, was => ({ ...was, page }))
 
     return next(e)
   })
@@ -220,37 +212,38 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { now, session, showing, modelKey, rows } = await drawn($)
+    const now = await read($, choice)
+    const session = await read($, seen)
+    const showing = await read($, view)
+    // Until a cell is picked, the dot sits where the session already is.
+    const modelKey = now.isOn ? now.model : modelRowFor(session.model)
     const effortKey =
       modelKey === null ? null : clampEffort(modelKey, now.isOn ? now.effort : (session.effort ?? 'default'))
-    // A session model with no row gets no dot: the caption names it instead.
-    const at =
-      modelKey === null
-        ? { row: -1, col: -1 }
-        : {
-            row: rows.findIndex(one => one.key === modelKey),
-            col: Math.max(0, EFFORTS.findIndex(one => one.key === effortKey)),
-          }
+    const page = Math.max(0, Math.min(PAGES.length - 1, showing.page))
+    const models = PAGES[page] ?? PAGES[0] ?? []
+    // A model on another page, or one the grid has no column for, gets no dot here.
+    const col = models.findIndex(one => one.key === modelKey)
+    const at = col < 0 ? { row: -1, col: -1 } : { row: ROWS.findIndex(one => one.key === effortKey), col }
+    const summary = now.isOn ? describe(now) : 'Using the session model'
 
-    if (e.surface !== 'desktop' && e.surface !== 'terminal') {
+    // Minimised into the side column, clicks may not arrive: show the choice at a glance.
+    if (e.props.placement === 'widget' || (e.surface !== 'desktop' && e.surface !== 'terminal')) {
       const { Box, Text } = $.ui.resolve(e)
 
       return (
         <Box flexDirection="column">
-          <Text bold>{now.isOn ? describe(now) : 'Using the session model'}</Text>
-          <Text dimColor>The grid needs the desktop app or a terminal.</Text>
+          <Text bold>{summary}</Text>
+          <Text dimColor>
+            {e.props.placement === 'widget' ? 'Open the pane to change it.' : 'The grid needs the desktop app or a terminal.'}
+          </Text>
         </Box>
       )
     }
 
     const { Box, Text, Client } = $.ui.resolve(e)
-    // What is left for the grid inside the pane's own padding.
+    const labelWidth = 11
     const inner = Math.max(0, e.props.bodyColumns - 2)
-    const cell = Math.max(3, Math.min(11, Math.floor((inner - 12 - 3) / EFFORTS.length)))
-    // A pane too narrow for the smallest grid gives up the gutter, then a label cell.
-    const spare = inner - cell * EFFORTS.length
-    const labelWidth = Math.max(11, Math.min(12, spare))
-    const gutter = Math.max(0, Math.min(3, spare - labelWidth))
+    const cell = Math.max(6, Math.min(13, Math.floor((inner - labelWidth) / PER_PAGE)))
 
     return (
       <Box flexDirection="column" paddingX={1} gap={1}>
@@ -258,20 +251,18 @@ export const register: Register = on => {
           key="grid"
           module="./grid.tsx"
           props={{
-            rows: rows.map(one => ({ key: one.key, label: one.label, max: one.max, isOlder: one.isOlder })),
-            cols: EFFORTS.map(one => one.label),
-            shortCols: EFFORTS.map(one => one.short),
-            hints: EFFORTS.map(one => one.hint),
+            efforts: ROWS,
+            models: models.map(one => ({ key: one.key, label: one.label, max: one.max })),
             at,
             isOn: now.isOn,
-            isExpanded: showing.isExpanded,
-            moreCount: MODELS.length - rows.length,
+            page,
+            pages: PAGES.length,
             labelWidth,
             cell,
-            gutter,
             isMono: e.surface === 'terminal',
           }}
-          width={labelWidth + cell * EFFORTS.length + gutter}
+          width={labelWidth + cell * models.length}
+          height={ROWS.length + 3}
         />
         <Text dimColor>{captionFor(now, showing.ran, session.model)}</Text>
       </Box>
@@ -281,19 +272,17 @@ export const register: Register = on => {
   // A pick from the grid. The data comes from the drawing surface: check it.
   on('ui.message', async ($, e, next) => {
     if (e.requestId !== PANE || e.element !== 'grid') return next(e)
-    const data = e.data as { model?: unknown; col?: unknown; expand?: unknown; reset?: unknown } | null
-    if (typeof data?.expand === 'boolean') {
-      const isExpanded = data.expand
-      await update($, view, was => ({ ...was, isExpanded }))
-      // The unfolded grid is taller: ask for the room, so its last line stays in sight.
-      await open($).catch(() => undefined)
+    const data = e.data as { model?: unknown; col?: unknown; page?: unknown; reset?: unknown } | null
+    if (typeof data?.page === 'number' && Number.isFinite(data.page)) {
+      const page = Math.max(0, Math.min(PAGES.length - 1, Math.trunc(data.page)))
+      await update($, view, was => ({ ...was, page }))
 
       return {}
     }
     // Back to the session's own model and effort: the mod changes nothing again.
     if (data?.reset === true) {
       await update($, choice, () => INITIAL)
-      await update($, view, was => ({ ...was, ran: null, kept: null }))
+      await update($, view, was => ({ ...was, ran: null }))
       await $.store.set(STORE_KEY, INITIAL)
       // The dot goes back to what the session is on now, not what it was on before the pick.
       const model = await $.session.model().catch(() => null)
@@ -309,7 +298,7 @@ export const register: Register = on => {
     if (was.isOn && was.model === to.model && was.effort === to.effort) return {}
     await update($, choice, () => to)
     // The proof under the grid belongs to the pick before this one.
-    await update($, view, one => ({ ...one, ran: null, kept: model.isOlder ? model.key : one.kept }))
+    await update($, view, one => ({ ...one, ran: null }))
     await $.store.set(STORE_KEY, to)
 
     return {}

@@ -16,12 +16,10 @@ export type Seen = {
 
 /** How the grid is showing, and the proof of what the pick did. */
 export type View = {
-  /** Whether the older models are unfolded. */
-  isExpanded: boolean
-  /** The id of the model that answered the latest request; null before one, and after a new pick. */
+  /** Which page of model columns is drawn: 0 is the current models. */
+  page: number
+  /** The id of the model that answered the latest request; null before one. */
   ran: string | null
-  /** The older model last picked, kept in sight while the rest are folded. */
-  kept: string | null
 }
 
 declare module 'claude-code' {
