@@ -10,6 +10,6 @@ ROWS=$(( (N + 9) / 10 ))
   --force-device-scale-factor=1.5 --window-size=5600,$((ROWS * 352 + 330)) \
   --screenshot="$PWD/tools/out/demo.png" "file://$PWD/tools/out/demo.html" 2>/dev/null
 ffmpeg -y -loglevel error -i tools/out/demo.png -frames:v "$N" \
-  -vf "crop=8400:$((ROWS * 528)):0:0,untile=10x${ROWS},setpts=N/14/TB,scale=840:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=none" \
-  -r 14 assets/demo.gif
+  -vf "crop=8400:$((ROWS * 528)):0:0,untile=10x${ROWS},setpts=N/30/TB,scale=840:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=none" \
+  -r 30 assets/demo.gif
 echo "assets/demo.gif ($N frames)"

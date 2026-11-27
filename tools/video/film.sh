@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")/../.."
 mkdir -p tools/out/film && rm -f tools/out/film/*.png
 npx -y tsx tools/preview.ts --film
-for n in 0 1 2; do
+for n in 0 1 2 3 4 5; do
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu --hide-scrollbars \
     --force-device-scale-factor=2 --window-size=5600,3300 \
     --screenshot="$PWD/tools/out/film$n.png" "file://$PWD/tools/out/film$n.html" 2>/dev/null

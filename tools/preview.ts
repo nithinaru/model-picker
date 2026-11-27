@@ -202,8 +202,19 @@ const main = async () => {
     }
     const DOWN = 0.9
     const GO = 1.0
-    const pace = toUltra / (5.8 - GO)
-    const UP = GO + total / pace + 0.1
+    const RAMP = 0.3 // seconds to reach the drag's pace, and to come off it
+    const pace = toUltra / (5.8 - GO - RAMP / 2)
+    const cruise = total / pace
+    const UP = GO + cruise + RAMP + 0.12
+    /** How far along the path the dot is, a time after it sets off: up to pace, steady, then down from it. */
+    const gone = (t: number) => {
+      if (t <= 0) return 0
+      if (t < RAMP) return (pace * t * t) / (2 * RAMP)
+      if (t < cruise) return pace * (t - RAMP / 2)
+      const late = Math.min(RAMP, t - cruise)
+
+      return pace * (cruise - RAMP / 2) + pace * (late - (late * late) / (2 * RAMP))
+    }
     const start = { x: -144, y: 528 }
     const rest = { x: 330, y: 300 }
     const where = (t: number) => {
@@ -219,7 +230,7 @@ const main = async () => {
 
         return { x: end.x + (rest.x - end.x) * Math.max(0, f), y: end.y + (rest.y - end.y) * Math.max(0, f) }
       }
-      const d = Math.min(total, (t - GO) * pace)
+      const d = Math.min(total, gone(t - GO))
       let i = 1
       while (i < far.length - 1 && far[i]! < d) i++
       const f = (d - far[i - 1]!) / (far[i]! - far[i - 1]! || 1)
@@ -231,8 +242,8 @@ const main = async () => {
     let clock = 0
     let held = false
     let says = 'Following the session. Click a cell or drag the dot to choose a model and effort.'
-    for (let i = 0; i < 270; i++) {
-      const t = i / 30
+    for (let i = 0; i < 540; i++) {
+      const t = i / 60
       const p = where(t)
       const e = { x: Math.floor(p.x / CW), y: Math.floor(p.y / RH), fine: { x: p.x / CW, y: p.y / RH } }
       if (!held && t >= DOWN && t < UP) {
@@ -244,8 +255,9 @@ const main = async () => {
         grid.set({ at: { row: 1, col: 5 }, isOn: true })
         says = 'Set. Your next prompt uses it.'
       } else grid.point((held ? { type: 'move', ...e, button: 'left' } : { type: 'move', ...e }) as Pointer)
-      while (clock + 0.07 <= t) {
-        clock += 0.07
+      // The grid's own clock steps sixty times a second.
+      while (clock + 1 / 60 <= t + 1e-9) {
+        clock += 1 / 60
         grid.tick(1)
       }
       frames.push(`<div style="width:560px;height:330px;box-sizing:border-box;background:${inks.page};overflow:hidden;flex-shrink:0">
@@ -253,7 +265,7 @@ const main = async () => {
       const cell = `${Math.round((p.y / RH - top) / shape.pitch)}:${Math.floor((p.x / CW - shape.labelWidth) / shape.cell)}`
       track.push({ x: Math.round(p.x), y: Math.round(p.y), down: held, cell: held ? cell : '' })
     }
-    writeFileSync('tools/out/film.json', JSON.stringify({ track, down: DOWN, up: UP }))
+    writeFileSync('tools/out/film.json', JSON.stringify({ fps: 60, track, down: DOWN, up: UP }))
     for (let page = 0; page * 90 < frames.length; page++) {
       writeFileSync(`tools/out/film${page}.html`, `<!doctype html><meta charset="utf-8">${FACE}<body style="background:${inks.page}">
       <div style="display:flex;flex-wrap:wrap;width:5600px">${frames.slice(page * 90, page * 90 + 90).join('')}</div></body>`)
@@ -270,7 +282,7 @@ const main = async () => {
     let says = 'Following the session. Click a cell or drag the dot to choose a model and effort.'
     const shoot = (steps: number) => {
       for (let i = 0; i < steps; i++) {
-        grid.tick(1)
+        grid.tick(2)
         frames.push(`<div style="width:560px;height:352px;box-sizing:border-box;background:${inks.page};padding:28px 32px;overflow:hidden;flex-shrink:0">
           ${grid.render()}<div style="color:${inks.inactive};margin-top:${RH}px">${esc(says)}</div></div>`)
       }
@@ -280,7 +292,7 @@ const main = async () => {
       const a = cellAt(from[0], from[1])
       const b = cellAt(to[0], to[1])
       grid.point({ type: 'down', ...a, button: 'left' })
-      const steps = Math.max(4, Math.ceil(Math.hypot(b.x - a.x, (b.y - a.y) * 2.4) / 2.5))
+      const steps = Math.max(8, Math.ceil(Math.hypot(b.x - a.x, (b.y - a.y) * 2.4) / 0.9))
       for (let i = 1; i <= steps; i++) {
         const ease = (1 - Math.cos((Math.PI * i) / steps)) / 2
         grid.point({ type: 'move', x: Math.round(a.x + (b.x - a.x) * ease), y: Math.round(a.y + (b.y - a.y) * ease), button: 'left' })
@@ -289,16 +301,16 @@ const main = async () => {
       grid.point({ type: 'up', ...b, button: 'left' })
       grid.set({ at: { row: to[0], col: to[1] }, isOn: true })
     }
-    shoot(12)
+    shoot(26)
     dragTo([0, 2], [1, 5])
     says = 'Set. Your next prompt uses it.'
-    shoot(16)
+    shoot(34)
     dragTo([1, 5], [0, 6])
     says = 'Ultracode sends Max effort and adds the word ultracode to each prompt.'
-    shoot(16)
+    shoot(34)
     dragTo([0, 6], [2, 1])
     says = 'Last answer came from Sonnet 5.5.'
-    shoot(18)
+    shoot(40)
     console.log(`<!doctype html><meta charset="utf-8">${FACE}<body style="background:${inks.page}">
     <div data-frames="${frames.length}" style="display:flex;flex-wrap:wrap;width:5600px">${frames.join('')}</div></body>`)
 
@@ -308,7 +320,7 @@ const main = async () => {
   const shot = (title: string, over: Record<string, unknown>, theme: 'light' | 'dark', act?: (grid: ReturnType<typeof mount>) => void) => {
     inks = INKS[theme] ?? {}
     const grid = mount(over)
-    grid.tick(4)
+    grid.tick(16)
     act?.(grid)
 
     return `<section style="background:${inks.page};padding:20px 24px 24px;border:1px solid #DEDCD1">

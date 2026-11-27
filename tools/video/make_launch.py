@@ -19,7 +19,7 @@ import wave
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-W, H, FPS, DUR, SR = 1920, 1080, 30, 18.0, 44100
+W, H, FPS, DUR, SR = 1920, 1080, 60, 18.0, 44100
 GRID_T0 = 7.2  # when the grid's own frames start playing
 BPM = 124.0
 BEAT = 60.0 / BPM
@@ -257,54 +257,89 @@ class Film:
 
 # ------------------------------------------------------------ the opening
 
-CELL_W, CELL_H = 16, 28
-
-def glyph(level, dx, dy):
-    """The mark a level of the ember wears, as the mod draws it."""
-    if level <= 0:
-        return '.'
-    if level == 1:
-        return ':'
-    if level >= 8:
-        return '#'
-    if level == 7:
-        return '*'
-    if level == 6:
-        return '+'
-    ax, ay = abs(dx), abs(dy)
-    if ay < ax * 0.45:
-        return '=' if level >= 4 else '-'
-    if ax < ay * 0.45:
-        return '|' if level >= 3 else "'"
-    if level == 2:
-        return '~'
-    if level == 5:
-        return 'x'
-    return '/' if (dx > 0) == (dy < 0) else '\\'
+# The opening and closing marks are worked out for every character cell at
+# once, and each frame is the average of several moments inside it, so a mark
+# that changes fades into the next instead of snapping.
+CELL_W, CELL_H, GLYPH_PT = 13, 24, 22
+GLYPHS = " .:'-~=|/\\x+*#"
+GID = {ch: i for i, ch in enumerate(GLYPHS)}
+ROWS_N, COLS_N = H // CELL_H + 1, W // CELL_W + 1
+XS = (np.arange(COLS_N) * CELL_W + CELL_W / 2)[None, :].repeat(ROWS_N, 0)
+YS = (np.arange(ROWS_N) * CELL_H + CELL_H / 2)[:, None].repeat(COLS_N, 1)
+PALE = np.array(hx('#FFE9A8'), np.float32)
+HOT = np.array(hx('#E2701F'), np.float32)
+CREAM = np.array(hx('#FFF1DC'), np.float32)
+BGV = np.array(BG, np.float32)
+UNIT = 16.0  # the pattern's own unit of length, in pixels
+_masks = None
 
 
+def masks():
+    """Each mark as a cell-sized stencil."""
+    global _masks
+    if _masks is None:
+        _masks = np.zeros((len(GLYPHS), CELL_H, CELL_W), np.float32)
+        for i, ch in enumerate(GLYPHS):
+            if ch != ' ':
+                cell = Image.new('L', (CELL_W, CELL_H), 0)
+                ImageDraw.Draw(cell).text((CELL_W / 2, CELL_H / 2), ch, font=font(MONO, GLYPH_PT), fill=255, anchor='mm')
+                _masks[i] = np.asarray(cell, np.float32) / 255
+    return _masks
 
-def marks(img, t, cx, cy, reach, core, ring=None, ring_gain=0.0):
-    """ASCII alone: a turning ember of marks about a point, and a ring of them at a radius, in character cells."""
-    d = ImageDraw.Draw(img)
-    face = font(MONO, 26)
-    for r in range(H // CELL_H + 1):
-        for c in range(W // CELL_W):
-            dx = (c * CELL_W + 8 - cx) / CELL_W
-            dy = (r * CELL_H + 14 - cy) / CELL_W
-            dist = math.hypot(dx, dy)
-            if ring is None and dist > reach:
-                continue
-            ang = math.atan2(dy, dx)
-            heat = max(0.0, 1 - dist / reach) ** 1.1 * (1 + 0.5 * math.sin(3 * ang + dist * 0.55 - t * 5)) * core
-            if ring is not None:
-                heat = max(heat, math.exp(-((dist - ring) / 4.5) ** 2) * (1 + 0.4 * math.sin(5 * ang - t * 6)) * ring_gain)
-            heat = min(1.0, heat)
-            if heat <= 0.07:
-                continue
-            ink = mix(hx('#FFE9A8'), hx('#E2701F'), heat ** 0.7)
-            d.text((c * CELL_W, r * CELL_H), glyph(min(9, int(heat * 10)), dx, dy), font=face,
-                   fill=mix(BG, ink, 0.3 + 0.7 * heat), anchor='lt')
+
+def field(t, cx, cy, reach, core, ring=None, ring_gain=0.0):
+    """The heat of every cell: a turning ember about a point, and a ring of marks at a radius (lengths in pixels)."""
+    dx = (XS - cx) / UNIT
+    dy = (YS - cy) / UNIT
+    dist = np.hypot(dx, dy)
+    ang = np.arctan2(dy, dx)
+    heat = np.clip(1 - dist / (reach / UNIT), 0, None) ** 1.1 * (1 + 0.5 * np.sin(3 * ang + dist * 0.55 - t * 5)) * core
+    if ring is not None:
+        heat = np.maximum(heat, np.exp(-((dist - ring / UNIT) / 4.5) ** 2) * (1 + 0.4 * np.sin(5 * ang - t * 6)) * ring_gain)
+    return np.clip(heat, 0, 1), dx, dy
+
+
+def layer(heat, dx, dy):
+    """The marks for a field of heat: their colour times their cover, and their cover."""
+    level = np.minimum(9, (heat * 10).astype(np.int32))
+    ax, ay = np.abs(dx), np.abs(dy)
+    flat, tall = ay < ax * 0.45, ax < ay * 0.45
+    ids = np.select(
+        [heat <= 0.07, level <= 0, level == 1, level >= 8, level == 7, level == 6, flat & (level >= 4), flat,
+         tall & (level >= 3), tall, level == 2, level == 5, (dx > 0) == (dy < 0)],
+        [GID[' '], GID['.'], GID[':'], GID['#'], GID['*'], GID['+'], GID['='], GID['-'], GID['|'], GID["'"], GID['~'],
+         GID['x'], GID['/']], default=GID['\\'])
+    cover = masks()[ids].transpose(0, 2, 1, 3).reshape(ROWS_N * CELL_H, COLS_N * CELL_W)[:H, :W, None]
+    ink = PALE + (HOT - PALE) * (heat ** 0.7)[..., None]
+    # The hottest marks lift toward cream, so the ember has a bright heart.
+    ink = ink + (CREAM - ink) * (np.clip((heat - 0.8) / 0.2, 0, 1) * 0.6)[..., None]
+    colour = BGV + (ink - BGV) * (0.42 + 0.58 * heat)[..., None]
+    colour = np.repeat(np.repeat(colour, CELL_H, 0), CELL_W, 1)[:H, :W]
+    return colour * cover, cover
+
+
+def with_marks(img, t, at, moments=4):
+    """Lays the marks over a picture, averaged over the frame's own duration."""
+    colour = np.zeros((H, W, 3), np.float32)
+    cover = np.zeros((H, W, 1), np.float32)
+    for j in range(moments):
+        tj = t + ((j + 0.5) / moments - 0.5) / FPS
+        c, a = layer(*field(tj, *at(tj)))
+        colour += c
+        cover += a
+    out = np.asarray(img, np.float32) * (1 - cover / moments) + colour / moments
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
+def opening(t):
+    """ASCII alone: a turning ember of marks that bursts into a ring and sweeps off the picture."""
+    k = smooth((t - 1.3) / 0.8)
+    return W / 2, H / 2, (24 + 5 * smooth(t / 1.3)) * UNIT, 1 - min(1.0, k * 2.2), (20 + 52 * k) * UNIT if k > 0 else None, 1 - 0.4 * k
+
+
+def closing(t):
+    k = smooth((t - 16.2) / 0.8)
+    return W / 2, H / 2, UNIT, 0.0, (4 + 68 * k) * UNIT, 1 - 0.4 * k
 
 
 def hole(radius):
@@ -314,8 +349,7 @@ def hole(radius):
 
 
 def end_card(t):
-    img = Image.new('RGB', (W, H), BG)
-    marks(img, t, W / 2, 300, 9, 1.0)
+    img = with_marks(Image.new('RGB', (W, H), BG), t, lambda tj: (W / 2, 300, 9 * UNIT, 1.0), moments=2)
     d = ImageDraw.Draw(img)
     d.text((W / 2, 590), 'model-picker', font=font(f'{SANS}/AnthropicSans-Romans-Variable-25x258.ttf', 132),
            fill=mix(BG, INK, smooth((t - 16.6) / 0.3)), anchor='mm')
@@ -328,21 +362,17 @@ def frame(film, t):
     # The opening: ASCII alone, already burning, which bursts into a ring that uncovers the window.
     if t < 2.15:
         k = smooth((t - 1.3) / 0.8)
-        ring = 20 + 52 * k
         img = Image.new('RGB', (W, H), BG)
         if k > 0:
-            img = Image.composite(film.shot(t), img, hole((ring - 3) * CELL_W))
-        marks(img, t, W / 2, H / 2, 24 + 5 * smooth(t / 1.3), 1 - min(1.0, k * 2.2), ring if k > 0 else None, 1 - 0.4 * k)
-        return img
+            img = Image.composite(film.shot(t), img, hole((20 + 52 * k - 3) * UNIT))
+        return with_marks(img, t, opening)
     img = film.shot(t)
     # The ending arrives the way the film began: a ring of ASCII sweeps out, and the card is inside it.
     if t >= 16.2:
         k = smooth((t - 16.2) / 0.8)
         if k >= 1:
             return end_card(t)
-        ring = 4 + 68 * k
-        img = Image.composite(end_card(t), img, hole((ring - 3) * CELL_W))
-        marks(img, t, W / 2, H / 2, 1, 0.0, ring, 1 - 0.4 * k)
+        img = with_marks(Image.composite(end_card(t), img, hole((4 + 68 * k - 3) * UNIT)), t, closing)
     return img
 
 

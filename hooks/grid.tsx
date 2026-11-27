@@ -3,8 +3,9 @@ import type { ClientModule } from 'claude-code'
 // The grid: models down the side, effort levels across the top, one dot. The
 // dot can be dragged anywhere between the cells and settles on the nearest one
 // when let go. Around it burns an ember of ASCII marks that glimmers on its
-// own, trails behind a drag, and shifts colour with the effort it is over. It
-// runs on the drawing surface with no `$`: a pick is posted to the hooks module.
+// own, streams behind a drag like a comet's tail, and shifts colour with the
+// effort it is over. It runs on the drawing surface with no `$`: a pick is
+// posted to the hooks module.
 
 type Model = { key: string; label: string; max: number }
 type At = { row: number; col: number }
@@ -37,6 +38,7 @@ type GridState = { hover: At | null; foot: Foot | null; tick: number }
 type Point = { x: number; y: number }
 type Ink = { color: string; dim?: true; bold?: true }
 type Run = { text: string; ink: Ink; width: number }
+type Rgb = [number, number, number]
 
 // Theme keys, so the grid's own inks follow the person's theme.
 const TEXT = 'text'
@@ -54,9 +56,11 @@ const LEVELS = 10
 
 const ASPECT = 2.4 // a screen line is about this many characters tall
 const RADIUS = 5.4 // the ember's reach at rest, in character widths: round on screen
-const TAIL = 1.3 // how much longer the ember trails behind a moving dot, as a share of RADIUS
-const EASE = 0.5 // how much of the way to its dot the glow glides each step
-const STEP_MS = 70 // the glide's clock; at rest the ember redraws every other step
+const TAIL = 2.2 // the longest the ember streams behind a moving dot, as a share of RADIUS
+const SETTLE = 0.35 // how much of the way to where it is headed the dot closes each step
+const CATCH = 0.075 // how much of the way to the dot the ember's tail closes each step
+const STEP_MS = 16 // the ember's clock: a step a frame while it moves, a redraw every fourth at rest
+const PALE: Rgb = [255, 240, 179] // what the ember's outer marks lift toward
 
 const MARKS = { rest: '•', picked: '⬤', pickedMono: '●' } as const
 const SETTLE_MS = 2000
@@ -70,16 +74,12 @@ let pending: At | null = null
 let stopSettle: (() => void) | null = null
 let stopClock: (() => void) | null = null
 let live: { setState: (next: GridState) => void } | null = null
-// The dot in flight: where it is headed, where it has got to, and its tail.
+// The dot in flight: where it is headed, where it has got to, and where the
+// far end of the ember's tail has got to behind it.
 let target: Point | null = null
 let head: Point | null = null
-let last: Point | null = null
+let tail: Point | null = null
 let beat = 0
-// How hard the dot is moving, 0 to 1: it rises with speed and ebbs at rest.
-// The ember swells with it, so more marks come in, coloured, as you drag.
-let energy = 0
-// The way the dot is moving, as a unit vector in character space; null at rest.
-let heading: Point | null = null
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 const apart = (a: Point, b: Point) => Math.hypot(a.x - b.x, (a.y - b.y) * ASPECT)
@@ -90,47 +90,42 @@ const hash = (x: number, y: number, t: number) => {
 
   return ((n ^ (n >>> 16)) >>> 0) / 4294967296
 }
-/** A colour part of the way from one hex to another. */
-const mix = (from: string, to: string, share: number) => {
-  const part = (hex: string, at: number) => parseInt(hex.slice(at, at + 2), 16)
-  const blend = (at: number) =>
-    Math.round(part(from, at) + (part(to, at) - part(from, at)) * share)
-      .toString(16)
-      .padStart(2, '0')
+const rgb = (hex: string): Rgb => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)]
+/** A colour part of the way from one to another. */
+const blend = (a: Rgb, b: Rgb, share: number): Rgb => [
+  a[0] + (b[0] - a[0]) * share,
+  a[1] + (b[1] - a[1]) * share,
+  a[2] + (b[2] - a[2]) * share,
+]
+const hexOf = (colour: Rgb) => `#${colour.map(part => Math.round(clamp(part, 0, 255)).toString(16).padStart(2, '0')).join('')}`
+const toward = (from: Point, to: Point, share: number): Point => ({
+  x: from.x + (to.x - from.x) * share,
+  y: from.y + (to.y - from.y) * share,
+})
 
-  return `#${blend(1)}${blend(3)}${blend(5)}`
-}
-
-/** One step of the clock: the dot glides toward where it is headed, and its tail cools. */
+/**
+ * One step of the clock. The dot closes on where it is headed (the pointer in
+ * a drag, its cell once let go) and the far end of the ember's tail closes on
+ * the dot, more slowly. Both move by parts of a character, so the glow slides
+ * between the marks instead of jumping from one to the next, streams behind a
+ * moving dot, and gathers round it again when it stops.
+ */
 const step = () => {
   beat += 1
   if (target === null) {
     head = null
-    last = null
-  } else if (head === null || apart(head, target) < 0.4) {
-    head = target
+    tail = null
   } else {
-    head = { x: head.x + (target.x - head.x) * EASE, y: head.y + (target.y - head.y) * EASE }
-  }
-  const moved = head !== null && last !== null ? apart(head, last) : 0
-  if (moved > 0.4 && head !== null && last !== null) {
-    const toward = { x: (head.x - last.x) / moved, y: ((head.y - last.y) * ASPECT) / moved }
-    // The heading turns toward the new way over a few steps, so a sharp change of direction swings rather than snaps.
-    if (heading === null) heading = toward
+    head = head === null || apart(head, target) < 0.1 ? target : toward(head, target, SETTLE)
+    if (tail === null || apart(tail, head) < 0.1) tail = head
     else {
-      const turn = 0.22
-      const x = heading.x + (toward.x - heading.x) * turn
-      const y = heading.y + (toward.y - heading.y) * turn
-      const length = Math.hypot(x, y) || 1
-      heading = { x: x / length, y: y / length }
+      tail = toward(tail, head, CATCH)
+      const long = apart(tail, head)
+      if (long > RADIUS * TAIL) tail = toward(head, tail, (RADIUS * TAIL) / long)
     }
   }
-  last = head
-  // Rises fast with movement, falls back slowly once still.
-  energy = moved > 0.4 ? Math.min(1, energy + moved * 0.09) : energy * 0.88
-  if (energy < 0.02) energy = 0
-  const isMoving = head !== target || energy > 0
-  if (!isMoving && beat % 2 !== 0) return
+  const isMoving = head !== null && target !== null && tail !== null && (apart(head, target) > 0.001 || apart(tail, head) > 0.001)
+  if (!isMoving && beat % 4 !== 0) return
   shown = { ...shown, tick: shown.tick + 1 }
   live?.setState(shown)
 }
@@ -180,9 +175,7 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     drag = null
     pending = null
     head = null
-    last = null
-    energy = 0
-    heading = null
+    tail = null
     stopSettle?.()
     stopSettle = null
     stopClock?.()
@@ -201,29 +194,32 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
   if (drag === null) target = at.row >= 0 && at.col >= 0 ? { x: centre(at.col), y: at.row * pitch } : null
   if (isFirst || target === null) {
     head = target
-    last = target
+    tail = target
   }
   // Where the dot is drawn: a whole cell on the way to where it is headed.
   const dot =
     head === null ? null : { x: clamp(Math.round(head.x), 1, width - 2), y: clamp(Math.round(head.y), 0, gridLines - 1) }
 
-  // The ember's inks, edge to core, for the effort the dot is over: between two
-  // columns they are a blend of both, so the colour shifts as the dot travels.
+  // The ember's colours for the effort the dot is over: between two columns
+  // they are a blend of both, so the colour shifts as the dot travels.
   const over = head === null ? 0 : clamp((head.x - Math.floor(cell / 2)) / cell, 0, cols - 1)
   const low = clamp(Math.floor(over), 0, EDGE.length - 1)
   const high = clamp(low + 1, 0, EDGE.length - 1)
-  const edge = mix(EDGE[low] ?? '#000000', EDGE[high] ?? '#000000', over - low)
-  const core = mix(CORE[low] ?? '#000000', CORE[high] ?? '#000000', over - low)
-  const ramp: Ink[] = Array.from({ length: LEVELS }, (_, level) => {
+  const edge = blend(rgb(EDGE[low] ?? '#000000'), rgb(EDGE[high] ?? '#000000'), over - low)
+  const coreRgb = blend(rgb(CORE[low] ?? '#000000'), rgb(CORE[high] ?? '#000000'), over - low)
+  const core = hexOf(coreRgb)
+  /**
+   * The ink for a heat from 0 to 1, with no steps in it: the outer marks lift
+   * toward a pale yellow, so an orange edge reads as yellow-cream at the rim
+   * and deepens to its own hue at the core.
+   */
+  const inkAt = (hot: number): Ink => {
     // The session's own setting, before any pick, burns with no colour.
-    if (!isMine) return level < 3 ? { color: OFF } : level < 7 ? { color: QUIET, dim: true } : { color: QUIET }
-    // The outer marks lift toward a pale yellow, so an orange edge reads as
-    // yellow-cream at the rim and deepens to its own hue at the core.
-    const outer = 1 - level / (LEVELS - 1)
-    const color = mix(mix(edge, '#FFF0B3', 0.5 * outer), core, level / (LEVELS - 1))
+    if (!isMine) return hot < 0.3 ? { color: OFF } : hot < 0.7 ? { color: QUIET, dim: true } : { color: QUIET }
+    const color = hexOf(blend(blend(edge, PALE, 0.5 * (1 - hot)), coreRgb, hot))
 
-    return level === LEVELS - 1 ? { color, bold: true } : { color }
-  })
+    return hot >= 0.92 ? { color, bold: true } : { color }
+  }
 
   // A level a model does not offer is pulled back to the last one it has.
   const snapTo = (row: number, col: number): At => {
@@ -252,14 +248,18 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
 
     return snapTo(row, col)
   }
-  /** Where the pointer is inside the dots' area, kept within it, and the cell nearest to that. */
+  /**
+   * Where the pointer is inside the dots' area, kept within it, and the cell
+   * nearest to that. A finer position keeps its part of a character, so the
+   * ember can follow it between the marks.
+   */
   const grab = (x: number, y: number, isFine: boolean) => {
     const point = {
-      x: clamp(Math.floor(x) - labelWidth, 1, width - 2),
-      y: clamp(isFine ? Math.round(y - 0.5) - top : Math.floor(y) - top, 0, gridLines - 1),
+      x: clamp((isFine ? x - 0.5 : Math.floor(x)) - labelWidth, 1, width - 2),
+      y: clamp((isFine ? y - 0.5 : Math.floor(y)) - top, 0, gridLines - 1),
     }
 
-    return { point, cell: snapTo(Math.round(point.y / pitch), Math.floor(point.x / cell)) }
+    return { point, cell: snapTo(Math.round(point.y / pitch), Math.floor((point.x + 0.5) / cell)) }
   }
 
   const pick = (to: At) => {
@@ -287,10 +287,9 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     pending = null
     surface.post({ reset: true })
   }
-  /** The dot follows the pointer: at once when it is close, by a glide when it is far. */
+  /** The dot heads for the pointer: the clock carries it there, a part of a character at a time. */
   const follow = (point: Point) => {
     target = point
-    if (head === null || apart(head, point) <= 5) head = point
   }
 
   surface.onPointer(e => {
@@ -375,45 +374,42 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     redraw({ hover: null })
   })
 
-  /** How hot a cell is, 0 to 1: the glow where the dot has got to, and the tail behind it. */
+  /**
+   * How hot a cell is, 0 to 1. At rest the ember is round. In motion it is a
+   * comet: full at the dot, tapering along the line back to where its tail has
+   * got to, and never wider than at rest.
+   */
   const heat = (x: number, y: number) => {
     if (head === null) return 0
-    // The ember keeps its size across the way of travel. Along it, it grows a
-    // tail behind the dot and stays short ahead, so it follows the dot instead
-    // of swelling around it.
-    const shape = (from: Point, at: number) => {
-      const dx = x - from.x
-      const dy = (y - from.y) * ASPECT
-      if (heading === null || energy === 0) return Math.max(0, 1 - Math.hypot(dx, dy) / (RADIUS * at))
-      const along = dx * heading.x + dy * heading.y
-      const across = -dx * heading.y + dy * heading.x
-      const length = along < 0 ? RADIUS * (1 + TAIL * energy) : RADIUS * (1 - 0.12 * energy)
-      const width = RADIUS * (1 - 0.12 * energy)
+    const end = tail ?? head
+    const ax = head.x - end.x
+    const ay = (head.y - end.y) * ASPECT
+    const px = x - end.x
+    const py = (y - end.y) * ASPECT
+    const long = ax * ax + ay * ay
+    // How far along the tail the cell sits: 0 at its far end, 1 at the dot.
+    const along = long < 0.01 ? 1 : clamp((px * ax + py * ay) / long, 0, 1)
+    const off = Math.hypot(px - ax * along, py - ay * along)
 
-      return Math.max(0, 1 - Math.hypot(along / length, across / width) * (RADIUS / (RADIUS * at)))
-    }
-    const most = shape(head, 1)
-
-    return most
+    return (0.45 + 0.55 * along) * Math.max(0, 1 - off / (RADIUS * (0.5 + 0.5 * along)))
   }
   /** One cell of the ember, or null where it does not reach. */
   const ember = (x: number, y: number): { text: string; ink: Ink } | null => {
     const origin = head
     const hot = heat(x, y)
     if (origin === null || hot <= 0.07) return null
-    const level = Math.min(LEVELS - 1, Math.floor(hot * LEVELS))
     const dx = x - origin.x
     const dy = (y - origin.y) * ASPECT
-    // Colour moves every step: a ripple running outward, and now and then a spark.
-    const ripple = level >= LEVELS - 2 ? 0 : Math.round(1.3 * Math.sin(Math.hypot(dx, dy) * 1.15 - shown.tick * 0.9))
-    const isSpark = level < LEVELS - 3 && hash(x, y, shown.tick) < 0.04
-    // In motion the outer marks run warmer, so the ones coming in arrive coloured, not faint.
-    const warm = level < LEVELS - 3 ? Math.round(energy * 3) : 0
-    const ink = ramp[isSpark ? LEVELS - 1 : clamp(level + ripple + warm, 0, LEVELS - 1)] ?? { color: QUIET }
+    // Colour moves with the clock, not with each redraw, so a drag does not
+    // hurry it: a ripple running outward, and sparks that swell and fade.
+    const time = (beat * STEP_MS) / 1000
+    const born = time / 0.5
+    const spark = hash(x, y, Math.floor(born)) < 0.05 ? Math.sin(Math.PI * (born - Math.floor(born))) : 0
+    const warm = hot + (1 - hot) * (0.13 * Math.sin(Math.hypot(dx, dy) * 1.15 - time * 5.2) + 0.45 * spark)
     // The mark is fixed by where the cell sits in the ember; only its colour moves.
-    const text = glyphFor(level, dx, dy)
+    const text = glyphFor(Math.min(LEVELS - 1, Math.floor(hot * LEVELS)), dx, dy)
 
-    return { text, ink }
+    return { text, ink: inkAt(clamp(warm, 0, 1)) }
   }
   /** One screen line of the dots' area as runs: the dots, the ember between them, and the gaps. */
   const lineOf = (y: number): Run[] => {
