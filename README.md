@@ -1,24 +1,20 @@
 # model-picker
 
-A Claude mod that picks the model and effort level by dragging one dot across a grid.
+A Claude mod that picks the model and effort level from a button above the prompt.
 
-Rows are models, columns are effort levels. Type `/model-picker` to open the pane, then drag the dot, or click it and use the arrow keys. The choice applies to every following request in the session and is remembered across sessions.
+Click the button (it shows "Pick model" or the current choice) to open the picker. Pick a model from the dropdown, pick an effort level from the row of buttons beneath it — only the levels that model supports are shown — and toggle Ultracode separately. The choice applies to every following request in the session and is remembered across sessions.
 
-## The grid
+Until you pick a model the mod changes nothing, and the picker mirrors whatever model and effort the session is already using.
 
-- **Auto row**: the mod picks a model for each prompt (Haiku, Sonnet or Opus) by asking a small fast model how demanding the prompt is. This costs one extra small request per prompt.
-- **Default column**: the mod sends no effort level of its own, so the session's setting stands.
-- **Max**: the highest effort level.
-- **Ultracode**: Max effort, plus the word `ultracode` added to the prompt so Claude Code switches on multi-agent orchestration.
-- Cells a model does not support are dimmed, and the dot snaps back to the last level the model allows.
+## Ultracode
 
-Until you move the dot for the first time the mod changes nothing.
+Ultracode is a toggle, independent of effort. When it's on, the mod adds the word `ultracode` to your prompt so Claude Code switches on multi-agent orchestration, on top of whatever effort level is set.
 
 ## Limits
 
 - The mod API lists neither the available models nor their effort levels, so both are a hand-kept table at the top of `hooks/register.tsx`. Update it when the lineup changes.
-- The draggable grid is drawn in the desktop app and the terminal. Other surfaces show the current choice as text.
-- The app's own model menu does not know about the mod's choice and may show a different model.
+- A mod can't replace the app's own `/model` command or model menu; this is a separate picker that sits beside it.
+- The picker is drawn in the desktop app and the terminal. Other surfaces show the current choice as text.
 
 ## Develop
 
