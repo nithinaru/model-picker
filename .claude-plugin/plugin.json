@@ -1,0 +1,6 @@
+{
+  "name": "model-picker",
+  "version": "0.1.0",
+  "description": "Pick the model and effort by dragging one dot across a grid",
+  "types": "./types/index.d.ts"
+}
