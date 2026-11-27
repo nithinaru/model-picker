@@ -391,7 +391,12 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     const along = long < 0.01 ? 1 : clamp((px * ax + py * ay) / long, 0, 1)
     const off = Math.hypot(px - ax * along, py - ay * along)
 
-    return (0.45 + 0.55 * along) * Math.max(0, 1 - off / (RADIUS * (0.5 + 0.5 * along)))
+    const streak = (0.45 + 0.55 * along) * Math.max(0, 1 - off / (RADIUS * (0.5 + 0.5 * along)))
+    // The round ember about the dot always stands; the tail only adds to it, so
+    // nothing behind the dot thins out and pops back as the tail catches up.
+    const round = Math.max(0, 1 - Math.hypot(x - head.x, (y - head.y) * ASPECT) / RADIUS)
+
+    return Math.max(round, streak)
   }
   /** One cell of the ember, or null where it does not reach. */
   const ember = (x: number, y: number): { text: string; ink: Ink } | null => {
