@@ -227,6 +227,13 @@ const main = async () => {
         grid.tick(1)
       }
     }),
+    shot('7b. Mid-drag, fast across the row: the ember swells (dark)', {}, 'dark', grid => {
+      grid.point({ type: 'down', ...cellAt(0, 0), button: 'left' })
+      for (const x of [14, 18, 22, 26, 30, 34]) {
+        grid.point({ type: 'move', x, y: 3, button: 'left' })
+        grid.tick(1)
+      }
+    }),
     shot('8. Untouched: follows the session, an ember with no colour (light)', { isOn: false }, 'light'),
     shot('9. Older models, second page (light)', { models: OLDER, page: 1, ...at(1, 4) }, 'light'),
     shot('10. Narrow sidebar, 38 columns: names step down (light)', shapeFor(38, 40), 'light'),

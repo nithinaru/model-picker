@@ -52,7 +52,8 @@ const CORE = ['#8C8A82', '#4F8FDB', '#6E7FE6', '#A46CCB', '#D05E8E', '#D97757', 
 const LEVELS = 10
 
 const ASPECT = 2.4 // a screen line is about this many characters tall
-const RADIUS = 6.2 // the ember's reach, in character widths: round on screen
+const RADIUS = 6.2 // the ember's reach at rest, in character widths: round on screen
+const SWELL = 0.7 // how much further it reaches at full speed, as a share of RADIUS
 const EASE = 0.5 // how much of the way to its dot the glow glides each step
 const STEP_MS = 70 // the glide's clock; at rest the ember redraws every other step
 
@@ -74,6 +75,9 @@ let head: Point | null = null
 let last: Point | null = null
 let trail: (Point & { a: number })[] = []
 let beat = 0
+// How hard the dot is moving, 0 to 1: it rises with speed and ebbs at rest.
+// The ember swells with it, so more marks come in, coloured, as you drag.
+let energy = 0
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 const apart = (a: Point, b: Point) => Math.hypot(a.x - b.x, (a.y - b.y) * ASPECT)
@@ -107,9 +111,13 @@ const step = () => {
   } else {
     head = { x: head.x + (target.x - head.x) * EASE, y: head.y + (target.y - head.y) * EASE }
   }
-  if (head !== null && last !== null && apart(head, last) > 0.4) trail = [{ ...last, a: 0.8 }, ...trail].slice(0, 10)
+  const moved = head !== null && last !== null ? apart(head, last) : 0
+  if (moved > 0.4) trail = [{ ...last!, a: 0.8 }, ...trail].slice(0, 10)
   last = head
-  const isMoving = trail.length > 0 || head !== target
+  // Rises fast with movement, falls back slowly once still.
+  energy = moved > 0.4 ? Math.min(1, energy + moved * 0.09) : energy * 0.88
+  if (energy < 0.02) energy = 0
+  const isMoving = trail.length > 0 || head !== target || energy > 0
   trail = trail.map(point => ({ ...point, a: point.a * 0.72 })).filter(point => point.a > 0.12)
   if (!isMoving && beat % 2 !== 0) return
   shown = { ...shown, tick: shown.tick + 1 }
@@ -163,6 +171,7 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     head = null
     last = null
     trail = []
+    energy = 0
     stopSettle?.()
     stopSettle = null
     stopClock?.()
@@ -355,9 +364,9 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
   /** How hot a cell is, 0 to 1: the glow where the dot has got to, and the tail behind it. */
   const heat = (x: number, y: number) => {
     if (head === null) return 0
-    let most = Math.max(0, 1 - apart(head, { x, y }) / RADIUS)
-    for (const point of trail) most = Math.max(most, point.a * Math.max(0, 1 - apart(point, { x, y }) / (RADIUS * 0.8)))
-
+    const reach = RADIUS * (1 + SWELL * energy)
+    let most = Math.max(0, 1 - apart(head, { x, y }) / reach)
+    for (const point of trail) most = Math.max(most, point.a * Math.max(0, 1 - apart(point, { x, y }) / (reach * 0.8)))
     return most
   }
   /** One cell of the ember, or null where it does not reach. */
@@ -371,10 +380,11 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     // Colour moves every step: a ripple running outward, and now and then a spark.
     const ripple = level >= LEVELS - 2 ? 0 : Math.round(1.3 * Math.sin(Math.hypot(dx, dy) * 1.15 - shown.tick * 0.9))
     const isSpark = level < LEVELS - 3 && hash(x, y, shown.tick) < 0.04
-    const ink = ramp[isSpark ? LEVELS - 1 : clamp(level + ripple, 0, LEVELS - 1)] ?? { color: QUIET }
-    // The mark itself changes only now and then, and only by a step.
-    const turn = hash(x, y, Math.floor(shown.tick / 6))
-    const text = glyphFor(clamp(level + (turn < 0.14 ? -1 : turn > 0.86 ? 1 : 0), 0, LEVELS - 1), dx, dy)
+    // In motion the outer marks run warmer, so the ones coming in arrive coloured, not faint.
+    const warm = level < LEVELS - 3 ? Math.round(energy * 3) : 0
+    const ink = ramp[isSpark ? LEVELS - 1 : clamp(level + ripple + warm, 0, LEVELS - 1)] ?? { color: QUIET }
+    // The mark is fixed by where the cell sits in the ember; only its colour moves.
+    const text = glyphFor(level, dx, dy)
 
     return { text, ink }
   }
