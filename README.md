@@ -34,6 +34,8 @@ Nothing changes until you pick a cell. After that, every prompt in the session u
 
 ## Develop
 
+The tools need Google Chrome, ffmpeg, and Python 3 with numpy and Pillow.
+
 ```
 claude plugin validate .
 claude plugin test .

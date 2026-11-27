@@ -2,7 +2,15 @@
   "name": "model-picker",
   "version": "0.1.0",
   "description": "Pick the model and effort level on a grid, with one dot",
-  "author": { "name": "nithinaru" },
+  "author": {
+    "name": "nithinaru"
+  },
   "license": "MIT",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "repository": "https://github.com/nithinaru/model-picker",
+  "keywords": [
+    "model",
+    "effort",
+    "picker"
+  ]
 }

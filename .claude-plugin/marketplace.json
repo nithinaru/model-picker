@@ -1,5 +1,13 @@
 {
   "name": "model-picker",
-  "owner": { "name": "nithinaru" },
-  "plugins": [{ "name": "model-picker", "source": "./" }]
+  "description": "Pick the model and effort level on a grid, with one dot",
+  "owner": {
+    "name": "nithinaru"
+  },
+  "plugins": [
+    {
+      "name": "model-picker",
+      "source": "./"
+    }
+  ]
 }
