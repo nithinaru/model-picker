@@ -117,7 +117,16 @@ const step = () => {
   const moved = head !== null && last !== null ? apart(head, last) : 0
   if (moved > 0.4) trail = [{ ...last!, a: 0.8 }, ...trail].slice(0, 10)
   if (moved > 0.4 && head !== null && last !== null) {
-    heading = { x: (head.x - last.x) / moved, y: ((head.y - last.y) * ASPECT) / moved }
+    const toward = { x: (head.x - last.x) / moved, y: ((head.y - last.y) * ASPECT) / moved }
+    // The heading turns toward the new way over a few steps, so a sharp change of direction swings rather than snaps.
+    if (heading === null) heading = toward
+    else {
+      const turn = 0.22
+      const x = heading.x + (toward.x - heading.x) * turn
+      const y = heading.y + (toward.y - heading.y) * turn
+      const length = Math.hypot(x, y) || 1
+      heading = { x: x / length, y: y / length }
+    }
   }
   last = head
   // Rises fast with movement, falls back slowly once still.
