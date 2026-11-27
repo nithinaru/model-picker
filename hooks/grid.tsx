@@ -74,7 +74,6 @@ let live: { setState: (next: GridState) => void } | null = null
 let target: Point | null = null
 let head: Point | null = null
 let last: Point | null = null
-let trail: (Point & { a: number })[] = []
 let beat = 0
 // How hard the dot is moving, 0 to 1: it rises with speed and ebbs at rest.
 // The ember swells with it, so more marks come in, coloured, as you drag.
@@ -108,14 +107,12 @@ const step = () => {
   if (target === null) {
     head = null
     last = null
-    trail = []
   } else if (head === null || apart(head, target) < 0.4) {
     head = target
   } else {
     head = { x: head.x + (target.x - head.x) * EASE, y: head.y + (target.y - head.y) * EASE }
   }
   const moved = head !== null && last !== null ? apart(head, last) : 0
-  if (moved > 0.4) trail = [{ ...last!, a: 0.8 }, ...trail].slice(0, 10)
   if (moved > 0.4 && head !== null && last !== null) {
     const toward = { x: (head.x - last.x) / moved, y: ((head.y - last.y) * ASPECT) / moved }
     // The heading turns toward the new way over a few steps, so a sharp change of direction swings rather than snaps.
@@ -132,8 +129,7 @@ const step = () => {
   // Rises fast with movement, falls back slowly once still.
   energy = moved > 0.4 ? Math.min(1, energy + moved * 0.09) : energy * 0.88
   if (energy < 0.02) energy = 0
-  const isMoving = trail.length > 0 || head !== target || energy > 0
-  trail = trail.map(point => ({ ...point, a: point.a * 0.72 })).filter(point => point.a > 0.12)
+  const isMoving = head !== target || energy > 0
   if (!isMoving && beat % 2 !== 0) return
   shown = { ...shown, tick: shown.tick + 1 }
   live?.setState(shown)
@@ -185,7 +181,6 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     pending = null
     head = null
     last = null
-    trail = []
     energy = 0
     heading = null
     stopSettle?.()
@@ -397,8 +392,7 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
 
       return Math.max(0, 1 - Math.hypot(along / length, across / width) * (RADIUS / (RADIUS * at)))
     }
-    let most = shape(head, 1)
-    for (const point of trail) most = Math.max(most, point.a * shape(point, 0.7))
+    const most = shape(head, 1)
 
     return most
   }

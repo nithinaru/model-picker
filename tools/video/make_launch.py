@@ -23,7 +23,7 @@ W, H, FPS, DUR, SR = 1920, 1080, 30, 18.0, 44100
 GRID_T0 = 7.2  # when the grid's own frames start playing
 BPM = 124.0
 BEAT = 60.0 / BPM
-DROP = GRID_T0 + 12 * BEAT  # the drop lands as the dot is flung to Ultracode
+DROP = GRID_T0 + 12 * BEAT  # the drop lands as the dot reaches Ultracode
 
 SANS = '/Applications/Claude.app/Contents/Resources/fonts'
 MONO = '/System/Library/Fonts/Menlo.ttc'
@@ -91,6 +91,8 @@ body {{ margin: 0; font: 14px/20px 'Anthropic Sans', -apple-system, sans-serif; 
 .bar {{ height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid rgba(222,220,209,.12); }}
 .dot {{ width: 12px; height: 12px; border-radius: 6px; }}
 .ic {{ width: 15px; height: 15px; border: 1.5px solid #9C9A92; border-radius: 4px; }}
+.ring {{ width: 16px; height: 16px; border-radius: 8px; background: conic-gradient(#3987E5 0 24%, #5C5B57 0); -webkit-mask: radial-gradient(circle, transparent 5px, #000 5.6px); }}
+.auto {{ display: flex; align-items: center; gap: 10px; font-size: 13px; color: #C2C0B6; }}
 </style>
 <div class="a" style="left:0;top:0;width:1440px;height:900px;background:#262624">
   <div class="bar"><div class="dot" style="background:#FF5F57"></div><div class="dot" style="background:#FEBC2E"></div><div class="dot" style="background:#28C840"></div>
@@ -101,7 +103,9 @@ body {{ margin: 0; font: 14px/20px 'Anthropic Sans', -apple-system, sans-serif; 
   <div style="font-size:22px;color:#C2C0B6;font-weight:300">+</div><div style="color:#9C9A92">Type / for commands</div><div class="ic" style="margin-left:auto;border-radius:8px;width:13px;height:18px"></div></div>
 <div class="a" style="left:800px;top:920px;height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;border-radius:8px;background:#3A3936;font-size:13px"><span style="font-weight:500">Fable 5.2</span><span style="color:#9C9A92">Medium</span></div>
 <div class="a" style="left:0;top:1000px;width:760px;height:44px;border-radius:12px;background:#30302E;display:flex;align-items:center;padding:0 8px">
-  <div style="padding:4px 10px;border-radius:8px;background:#45443F;font-size:13px">Pick model</div></div>
+  <div style="padding:4px 10px;border-radius:8px;background:#45443F;font-size:13px">Pick model</div>
+  <div class="auto" style="margin-left:auto;padding-right:6px"><span>Auto</span><div class="ring"></div></div></div>
+<div class="a auto" style="left:1000px;top:920px;height:30px"><span>Auto</span><div class="ring"></div></div>
 <div class="a" style="left:1500px;top:0;width:620px;height:900px;background:#262624;border-left:1px solid rgba(222,220,209,.14)">
   <div class="bar"><div style="font-weight:500">Model picker</div><div style="margin-left:auto;display:flex;gap:14px"><div class="ic"></div><div class="ic" style="border-radius:8px"></div></div></div></div>
 """
@@ -118,18 +122,29 @@ def sprites():
     sheet = Image.open(shot).convert('RGBA')
     cut = lambda x, y, w, h: sheet.crop((x * S, y * S, (x + w) * S, (y + h) * S))
     return {'base': cut(0, 0, 1440, 900).convert('RGB'), 'prompt': cut(0, 920, 760, 56), 'chip': cut(800, 920, 150, 30),
-            'band': cut(0, 1000, 760, 44), 'pane': cut(1500, 0, 620, 900).convert('RGB')}
+            'band': cut(0, 1000, 760, 44), 'auto': cut(1000, 920, 64, 30), 'pane': cut(1500, 0, 620, 900).convert('RGB')}
 
 
 def cursor_sprite():
-    k = 2.6 * S
-    pts = [(0, 0), (0, 17), (4.5, 13), (7.6, 19.6), (10.2, 18.4), (7.2, 12), (12.6, 12)]
-    spr = Image.new('RGBA', (int(16 * k), int(23 * k)), (0, 0, 0, 0))
+    """The macOS arrow: black, edged in white, with a soft shadow. Returns it and where its tip is."""
+    k = 1.25 * S * 4  # drawn four times too large, then reduced, for a clean edge
+    at = lambda points, dx=0.0, dy=0.0: [((x - 6 + dx) * k, (y - 3 + dy) * k) for x, y in points]
+    edge = [[(8.2, 20.9), (8.2, 4.9), (19.8, 16.5), (13, 16.5), (12.6, 16.6)], [(17.3, 21.6), (13.7, 23.1), (9, 12), (12.7, 10.5)]]
+    arrow = [(9.2, 7.3), (9.2, 18.5), (12.2, 15.6), (12.6, 15.5), (17.4, 15.5)]
+    tail = [(0.9221 * x + 0.3871 * y - 5.7605, -0.3871 * x + 0.9221 * y + 6.5909)
+            for x, y in [(12.5, 13.6), (14.5, 13.6), (14.5, 21.6), (12.5, 21.6)]]
+    spr = Image.new('RGBA', (int(18 * k), int(25 * k)), (0, 0, 0, 0))
     d = ImageDraw.Draw(spr)
-    at = [(2 * S + x * k, 2 * S + y * k) for x, y in pts]
-    d.polygon(at, fill=(20, 20, 19, 255))
-    d.line(at + [at[0]], fill=(255, 255, 255, 255), width=int(1.4 * S), joint='curve')
-    return spr
+    for poly in edge:
+        d.polygon(at(poly, 0.5, 1.1), fill=(0, 0, 0, 120))
+    spr = spr.filter(ImageFilter.GaussianBlur(k * 0.7))
+    d = ImageDraw.Draw(spr)
+    for poly in edge:
+        d.polygon(at(poly), fill=(255, 255, 255, 255))
+    d.polygon(at(arrow), fill=(0, 0, 0, 255))
+    d.polygon(at(tail), fill=(0, 0, 0, 255))
+    spr = spr.resize((spr.size[0] // 4, spr.size[1] // 4), Image.LANCZOS)
+    return spr, (int((8.2 - 6) * k / 4), int((4.9 - 3) * k / 4))
 
 
 def key(keys, t):
@@ -153,8 +168,10 @@ MOUSE = [(0, 980, 560), (3.3, 1100, 810), (4.4, 1100, 810), (5.3, 640, 610), (6.
 class Film:
     def __init__(self):
         self.spr = sprites()
-        self.cursor = cursor_sprite()
-        self.track = json.load(open(os.path.join(TMP, 'film.json')))['track']
+        self.cursor, self.tip = cursor_sprite()
+        told = json.load(open(os.path.join(TMP, 'film.json')))
+        self.track = told['track']
+        CLICKS[1:] = [GRID_T0 + told['down'], GRID_T0 + told['up']]
         self.tiles = {}
         stage = Image.new('RGB', (W, H), (18, 18, 17))
         glow = Image.new('L', (W, H), 0)
@@ -190,7 +207,10 @@ class Film:
         py = 680 + 30 * smooth((t - 4.5) / 0.5)
         img.paste(self.spr['prompt'], (int(px * S), int(py * S)), self.spr['prompt'])
         # The app's own model chip: it swells into a puff of cloud and is gone.
-        cx, cy = px + 760 - 75, 759
+        cx, cy = px + 760 - 64 - 14 - 75, 759
+        # The app's Auto and usage ring sit beside the chip, and move into the mod's row when it arrives.
+        if t < 4.8:
+            paste(img, self.spr['auto'], (px + 760 - 32) * S, cy * S, 1.0, 1 - smooth((t - 4.45) / 0.3))
         if t < 4.2:
             grow = 1 + 0.3 * back((t - 3.6) / 0.2) if t >= 3.6 else 1.0
             gone = smooth((t - 3.8) / 0.35)
@@ -216,7 +236,7 @@ class Film:
             if 0 <= k < 1:
                 r = (6 + 26 * smooth(k)) * S
                 d.ellipse((mx * S - r, my * S - r, mx * S + r, my * S + r), outline=mix((38, 38, 36), INK, 1 - k), width=3 * S)
-        img.paste(self.cursor, (int(mx * S - 2 * S), int(my * S - 2 * S)), self.cursor)
+        img.paste(self.cursor, (int(mx * S) - self.tip[0], int(my * S) - self.tip[1]), self.cursor)
         return img
 
     def shot(self, t):
@@ -226,8 +246,6 @@ class Film:
             mx, my = self.mouse(t)
             follow = 0.28 * smooth((t - 7.9) / 0.6) * (1 - smooth((t - 15.6) / 0.5))
             fx, fy = fx + (mx - fx) * follow, fy + (my - fy) * follow
-        if t >= DROP:
-            z *= 1 + 0.07 * math.exp(-(t - DROP) * 6)
         vw, vh = WW / z, WH / z
         x0 = max(0, min(WW - vw, fx - vw / 2))
         y0 = max(0, min(WH - vh, fy - vh / 2))
@@ -317,10 +335,6 @@ def frame(film, t):
         marks(img, t, W / 2, H / 2, 24 + 5 * smooth(t / 1.3), 1 - min(1.0, k * 2.2), ring if k > 0 else None, 1 - 0.4 * k)
         return img
     img = film.shot(t)
-    if t >= DROP:
-        flash = math.exp(-(t - DROP) * 14) * 0.3
-        if flash > 0.01:
-            img = Image.blend(img, Image.new('RGB', (W, H), (255, 246, 232)), flash)
     # The ending arrives the way the film began: a ring of ASCII sweeps out, and the card is inside it.
     if t >= 16.2:
         k = smooth((t - 16.2) / 0.8)
@@ -480,8 +494,7 @@ def build_audio(path, track):
             break
         add(t, kick(), 0.9 if t < DROP - 0.02 else 1.1)
         add(t, bass(notes[k % 8], BEAT * 0.45), 0.4 + 0.6 * cr(t))
-    add(DROP, crash())
-    add(DROP + 0.02, slam(), 0.8)
+    add(DROP, crash(), 0.6)
 
     # A breath of near silence before the drop, and the fade at the end.
     buf[int((DROP - 0.16) * SR):int(DROP * SR)] *= 0.12

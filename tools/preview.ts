@@ -173,26 +173,58 @@ const main = async () => {
       x: (shape.labelWidth + shape.cell * col + Math.floor(shape.cell / 2)) * CW + CW / 2,
       y: (top + row * shape.pitch) * RH + RH / 2,
     })
-    const keys = [
-      { t: 0, x: -144, y: 528 }, mid(0, 2, 0.8), mid(0, 2, 0.95), mid(0, 3, 1.4), mid(0, 4, 1.9), mid(0, 5, 2.4),
-      mid(0, 6, 3.0), mid(0, 6, 3.5), mid(1, 5, 4.2), mid(1, 3, 4.9), mid(2, 3, 5.5), mid(2, 3, 5.8),
-      mid(0, 6, 6.15), mid(0, 6, 6.5), mid(1, 5, 7.0), mid(1, 5, 7.3), { t: 8.0, x: 330, y: 300 }, { t: 9.0, x: 340, y: 306 },
-    ]
-    const DOWN = 0.95
-    const UP = 7.3
-    const where = (t: number) => {
-      for (let i = 1; i < keys.length; i++) {
-        const a = keys[i - 1]!
-        const b = keys[i]!
-        if (t <= b.t) {
-          const f = Math.max(0, Math.min(1, (t - a.t) / (b.t - a.t || 1)))
-          const e = f * f * (3 - 2 * f)
-
-          return { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e }
-        }
+    // The drag: one steady pace along a path with rounded corners, reaching Ultracode 5.8 seconds in.
+    const cells: [number, number][] = [[0, 2], [0, 5], [1, 5], [1, 2], [2, 2], [2, 3], [1, 3], [1, 6], [0, 6], [0, 5], [1, 5]]
+    let path = cells.map(([row, col]) => mid(row, col, 0))
+    for (let pass = 0; pass < 2; pass++) {
+      const next = [path[0]!]
+      for (let i = 0; i + 1 < path.length; i++) {
+        const a = path[i]!
+        const b = path[i + 1]!
+        next.push({ t: 0, x: a.x * 0.8 + b.x * 0.2, y: a.y * 0.8 + b.y * 0.2 }, { t: 0, x: a.x * 0.2 + b.x * 0.8, y: a.y * 0.2 + b.y * 0.8 })
       }
+      next.push(path.at(-1)!)
+      path = next
+    }
+    const far = [0]
+    for (let i = 1; i < path.length; i++) far.push(far[i - 1]! + Math.hypot(path[i]!.x - path[i - 1]!.x, path[i]!.y - path[i - 1]!.y))
+    const total = far.at(-1)!
+    const ultra = mid(1, 6, 0)
+    // The rounded path passes beside the Ultracode cell, not through it: take its nearest point.
+    let toUltra = total
+    let near = Infinity
+    for (let i = 0; i < path.length; i++) {
+      const gap = Math.hypot(path[i]!.x - ultra.x, path[i]!.y - ultra.y)
+      if (gap < near) {
+        near = gap
+        toUltra = far[i]!
+      }
+    }
+    const DOWN = 0.9
+    const GO = 1.0
+    const pace = toUltra / (5.8 - GO)
+    const UP = GO + total / pace + 0.1
+    const start = { x: -144, y: 528 }
+    const rest = { x: 330, y: 300 }
+    const where = (t: number) => {
+      const ease = (f: number) => f * f * (3 - 2 * Math.max(0, Math.min(1, f)))
+      if (t < GO) {
+        const f = ease(Math.min(1, t / 0.8))
 
-      return keys.at(-1)!
+        return { x: start.x + (path[0]!.x - start.x) * f, y: start.y + (path[0]!.y - start.y) * f }
+      }
+      if (t >= UP) {
+        const f = ease(Math.min(1, (t - UP - 0.15) / 0.9))
+        const end = path.at(-1)!
+
+        return { x: end.x + (rest.x - end.x) * Math.max(0, f), y: end.y + (rest.y - end.y) * Math.max(0, f) }
+      }
+      const d = Math.min(total, (t - GO) * pace)
+      let i = 1
+      while (i < far.length - 1 && far[i]! < d) i++
+      const f = (d - far[i - 1]!) / (far[i]! - far[i - 1]! || 1)
+
+      return { x: path[i - 1]!.x + (path[i]!.x - path[i - 1]!.x) * f, y: path[i - 1]!.y + (path[i]!.y - path[i - 1]!.y) * f }
     }
     const frames: string[] = []
     const track: { x: number; y: number; down: boolean; cell: string }[] = []
@@ -221,7 +253,7 @@ const main = async () => {
       const cell = `${Math.round((p.y / RH - top) / shape.pitch)}:${Math.floor((p.x / CW - shape.labelWidth) / shape.cell)}`
       track.push({ x: Math.round(p.x), y: Math.round(p.y), down: held, cell: held ? cell : '' })
     }
-    writeFileSync('tools/out/film.json', JSON.stringify({ track }))
+    writeFileSync('tools/out/film.json', JSON.stringify({ track, down: DOWN, up: UP }))
     for (let page = 0; page * 90 < frames.length; page++) {
       writeFileSync(`tools/out/film${page}.html`, `<!doctype html><meta charset="utf-8">${FACE}<body style="background:${inks.page}">
       <div style="display:flex;flex-wrap:wrap;width:5600px">${frames.slice(page * 90, page * 90 + 90).join('')}</div></body>`)
