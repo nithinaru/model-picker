@@ -2,10 +2,8 @@
 export type Choice = {
   /** A key of the mod's model rows, such as `opus-5-5`. */
   model: string
-  /** A key of the mod's effort columns, such as `default` or `max`. */
+  /** A key of the mod's effort columns, such as `default`, `max` or `ultracode`. */
   effort: string
-  /** Whether the Ultracode toggle is on. */
-  isUltra: boolean
   /** False until the person first picks a cell: the mod then changes nothing. */
   isOn: boolean
 }
@@ -20,8 +18,10 @@ export type Seen = {
 export type View = {
   /** Whether the older models are unfolded. */
   isExpanded: boolean
-  /** The id of the model that answered the latest request; null before one. */
+  /** The id of the model that answered the latest request; null before one, and after a new pick. */
   ran: string | null
+  /** The older model last picked, kept in sight while the rest are folded. */
+  kept: string | null
 }
 
 declare module 'claude-code' {
