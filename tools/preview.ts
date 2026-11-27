@@ -1,3 +1,5 @@
+import { writeFileSync } from 'node:fs'
+
 // Draws the grid to an HTML page without the app, so its look can be checked
 // by eye. `npx tsx tools/preview.ts` writes a page of states; `--demo` writes
 // the strip of frames the readme's animation is cut from. Cells are sized as
@@ -158,6 +160,76 @@ const main = async () => {
     x: given.labelWidth + given.cell * col + Math.floor(given.cell / 2),
     y: given.head.length + 1 + row * given.pitch,
   })
+
+  // `--film`: the grid driven by a scripted cursor at 30 frames a second, for
+  // the launch video. Writes pages of frames and the cursor's track beside them.
+  if (process.argv.includes('--film')) {
+    inks = INKS.dark ?? {}
+    const shape = shapeFor(66, 30)
+    const grid = mount({ ...shape, isOn: false, at: { row: 0, col: 2 } })
+    const top = shape.head.length + 1
+    const mid = (row: number, col: number, t: number) => ({
+      t,
+      x: (shape.labelWidth + shape.cell * col + Math.floor(shape.cell / 2)) * CW + CW / 2,
+      y: (top + row * shape.pitch) * RH + RH / 2,
+    })
+    const keys = [
+      { t: 0, x: -144, y: 528 }, mid(0, 2, 0.8), mid(0, 2, 0.95), mid(0, 3, 1.4), mid(0, 4, 1.9), mid(0, 5, 2.4),
+      mid(0, 6, 3.0), mid(0, 6, 3.5), mid(1, 5, 4.2), mid(1, 3, 4.9), mid(2, 3, 5.5), mid(2, 3, 5.8),
+      mid(0, 6, 6.15), mid(0, 6, 6.5), mid(1, 5, 7.0), mid(1, 5, 7.3), { t: 8.0, x: 330, y: 300 }, { t: 9.0, x: 340, y: 306 },
+    ]
+    const DOWN = 0.95
+    const UP = 7.3
+    const where = (t: number) => {
+      for (let i = 1; i < keys.length; i++) {
+        const a = keys[i - 1]!
+        const b = keys[i]!
+        if (t <= b.t) {
+          const f = Math.max(0, Math.min(1, (t - a.t) / (b.t - a.t || 1)))
+          const e = f * f * (3 - 2 * f)
+
+          return { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e }
+        }
+      }
+
+      return keys.at(-1)!
+    }
+    const frames: string[] = []
+    const track: { x: number; y: number; down: boolean; cell: string }[] = []
+    let clock = 0
+    let held = false
+    let says = 'Following the session. Click a cell or drag the dot to choose a model and effort.'
+    for (let i = 0; i < 270; i++) {
+      const t = i / 30
+      const p = where(t)
+      const e = { x: Math.floor(p.x / CW), y: Math.floor(p.y / RH), fine: { x: p.x / CW, y: p.y / RH } }
+      if (!held && t >= DOWN && t < UP) {
+        grid.point({ type: 'down', ...e, button: 'left' } as Pointer)
+        held = true
+      } else if (held && t >= UP) {
+        grid.point({ type: 'up', ...e, button: 'left' } as Pointer)
+        held = false
+        grid.set({ at: { row: 1, col: 5 }, isOn: true })
+        says = 'Set. Your next prompt uses it.'
+      } else grid.point((held ? { type: 'move', ...e, button: 'left' } : { type: 'move', ...e }) as Pointer)
+      while (clock + 0.07 <= t) {
+        clock += 0.07
+        grid.tick(1)
+      }
+      frames.push(`<div style="width:560px;height:330px;box-sizing:border-box;background:${inks.page};overflow:hidden;flex-shrink:0">
+        ${grid.render()}<div style="color:${inks.inactive};margin-top:${RH}px">${esc(says)}</div></div>`)
+      const cell = `${Math.round((p.y / RH - top) / shape.pitch)}:${Math.floor((p.x / CW - shape.labelWidth) / shape.cell)}`
+      track.push({ x: Math.round(p.x), y: Math.round(p.y), down: held, cell: held ? cell : '' })
+    }
+    writeFileSync('tools/out/film.json', JSON.stringify({ track }))
+    for (let page = 0; page * 90 < frames.length; page++) {
+      writeFileSync(`tools/out/film${page}.html`, `<!doctype html><meta charset="utf-8">${FACE}<body style="background:${inks.page}">
+      <div style="display:flex;flex-wrap:wrap;width:5600px">${frames.slice(page * 90, page * 90 + 90).join('')}</div></body>`)
+    }
+    console.log(`${frames.length} frames`)
+
+    return
+  }
 
   if (process.argv.includes('--demo')) {
     inks = INKS.dark ?? {}

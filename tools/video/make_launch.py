@@ -1,52 +1,52 @@
 """Renders the launch video: picture and sound from one timeline.
 
+    npx tsx tools/preview.ts --film   (then screenshot and split the pages: see tools/video/film.sh)
     python3 tools/video/make_launch.py          -> assets/launch.mp4
 
-Frames are drawn with Pillow in the app's own typeface; the music and sound
-effects are synthesised here, so the whole film rebuilds from this file.
+The grid on screen is the mod's own drawing: frames exported by
+tools/preview.ts from hooks/grid.tsx, driven by a scripted cursor. This file
+places them in a dark Claude Code window and films it the way a screen
+recording is edited: a cursor, zooms that follow it, and cuts. The music and
+sound effects are synthesised here.
 """
 
+import json
 import math
 import os
 import subprocess
 import wave
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-W, H, FPS, DUR, SR = 1080, 1350, 30, 18.0, 44100
+W, H, FPS, DUR, SR = 1920, 1080, 30, 18.0, 44100
+GRID_T0 = 7.2  # when the grid's own frames start playing
 BPM = 124.0
 BEAT = 60.0 / BPM
-DROP = 7.0 + 12 * BEAT  # the beat drop lands on a bar line of the groove
+DROP = GRID_T0 + 12 * BEAT  # the drop lands as the dot is flung to Ultracode
 
-SANS = '/Applications/Claude.app/Contents/Resources/fonts/AnthropicSans-Romans-Variable-25x258.ttf'
+SANS = '/Applications/Claude.app/Contents/Resources/fonts'
 MONO = '/System/Library/Fonts/Menlo.ttc'
+CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TMP = os.path.join(ROOT, 'tools', 'out')
 OUT = os.path.join(ROOT, 'assets', 'launch.mp4')
 
 BG = (11, 11, 10)
-PANEL = (38, 38, 36)
-CHIP = (58, 57, 54)
+WW, WH, S = 1440, 900, 2  # the app window, and how many pixels a point of it gets
+VIEW = (168, 45, 1584, 990)  # where the recording sits in the picture
+PANE_W = 620
+GRID_AT = (24, 72)  # the grid inside the pane
 INK = (250, 249, 245)
 DIM = (156, 154, 146)
-QUIET = (115, 114, 108)
-CLAY = (217, 119, 87)
-
-RAMP_LEVELS = 10
-CW, CH = 17, 30  # one mono cell on screen
-COLS_NAMES = ['Default', 'Low', 'Medium', 'High', 'Extra high', 'Max', 'Ultracode']
-ROW_NAMES = ['Fable 5.2', 'Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5']
-# The ramp along the effort columns, as the mod draws it: blue, grey, yellow, orange, purple.
-COL_INK = ['#4F8FDB', '#8C8A82', '#E0B93A', '#E8962A', '#E2701F', '#D97757', '#8E82E6']
 
 _fonts = {}
 
 
-def font(path, size, index=0):
-    key = (path, size, index)
-    if key not in _fonts:
-        _fonts[key] = ImageFont.truetype(path, size, index=index)
-    return _fonts[key]
+def font(path, size):
+    if (path, size) not in _fonts:
+        _fonts[(path, size)] = ImageFont.truetype(path, size)
+    return _fonts[(path, size)]
 
 
 def hx(s):
@@ -64,60 +64,182 @@ def smooth(x):
     return x * x * (3 - 2 * x)
 
 
-def ease_out_cubic(x):
+def back(x):
     x = max(0.0, min(1.0, x))
-    return 1 - (1 - x) ** 3
-
-
-def ease_out_back(x):
-    x = max(0.0, min(1.0, x))
-    c1 = 1.70158
-    return 1 + (c1 + 1) * (x - 1) ** 3 + c1 * (x - 1) ** 2
-
-
-def col_ink(c):
-    c = max(0.0, min(len(COL_INK) - 1.0, c))
-    i = int(math.floor(c))
-    j = min(len(COL_INK) - 1, i + 1)
-    return mix(hx(COL_INK[i]), hx(COL_INK[j]), c - i)
-
-
-def make_text(text, face, colour, pad=8):
-    """A transparent sprite of one line of text, to scale, fade and pop."""
-    probe = ImageDraw.Draw(Image.new('RGB', (4, 4)))
-    left, top, right, bottom = probe.textbbox((0, 0), text, font=face)
-    spr = Image.new('RGBA', (right - left + 2 * pad, bottom - top + 2 * pad), (0, 0, 0, 0))
-    ImageDraw.Draw(spr).text((pad - left, pad - top), text, font=face, fill=tuple(colour) + (255,))
-    return spr
-
-
-def make_pill(w, h, fill, radius, stroke=None):
-    spr = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(spr).rounded_rectangle((0, 0, w - 1, h - 1), radius=radius, fill=tuple(fill) + (255,),
-                                          outline=tuple(stroke) + (255,) if stroke else None, width=2)
-    return spr
+    return 1 + 2.70158 * (x - 1) ** 3 + 1.70158 * (x - 1) ** 2
 
 
 def paste(img, spr, cx, cy, scale=1.0, alpha=1.0):
+    """Pastes an RGBA sprite centred on a point, scaled and faded."""
     if alpha <= 0.0 or scale <= 0.02:
         return
     w, h = spr.size
     nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
     s = spr.resize((nw, nh), Image.LANCZOS) if (nw, nh) != (w, h) else spr
+    a = s.split()[3]
     if alpha < 1.0:
-        s = s.copy()
-        s.putalpha(s.split()[3].point(lambda v: int(v * alpha)))
-    img.paste(s.convert('RGB'), (int(cx - nw / 2), int(cy - nh / 2)), s.split()[3])
+        a = a.point(lambda v: int(v * alpha))
+    img.paste(s.convert('RGB'), (int(cx - nw / 2), int(cy - nh / 2)), a)
 
 
-def text_at(img, text, face, colour, cx, cy, scale=1.0, alpha=1.0):
-    paste(img, make_text(text, face, colour), cx, cy, scale, alpha)
+# ------------------------------------------------------------- the window
+
+SHEET = f"""<!doctype html><meta charset="utf-8"><style>
+@font-face {{ font-family: 'Anthropic Sans'; font-weight: 300 800; src: url('file://{SANS}/AnthropicSans-Romans-Variable-25x258.ttf'); }}
+body {{ margin: 0; font: 14px/20px 'Anthropic Sans', -apple-system, sans-serif; color: #FAF9F5; background: transparent; }}
+.a {{ position: absolute; box-sizing: border-box; }}
+.bar {{ height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid rgba(222,220,209,.12); }}
+.dot {{ width: 12px; height: 12px; border-radius: 6px; }}
+.ic {{ width: 15px; height: 15px; border: 1.5px solid #9C9A92; border-radius: 4px; }}
+</style>
+<div class="a" style="left:0;top:0;width:1440px;height:900px;background:#262624">
+  <div class="bar"><div class="dot" style="background:#FF5F57"></div><div class="dot" style="background:#FEBC2E"></div><div class="dot" style="background:#28C840"></div>
+    <div style="margin-left:14px;font-weight:500">model-picker</div><div style="color:#9C9A92">~/Downloads/CODE</div>
+    <div style="margin-left:auto;display:flex;gap:16px;align-items:center;color:#C2C0B6"><div class="ic"></div><div class="ic" style="border-radius:8px"></div><div class="ic"></div><div>Share</div></div></div>
+</div>
+<div class="a" style="left:0;top:920px;width:760px;height:56px;border-radius:16px;background:#30302E;border:1px solid rgba(222,220,209,.18);display:flex;align-items:center;padding:0 18px;gap:14px;font-size:15px">
+  <div style="font-size:22px;color:#C2C0B6;font-weight:300">+</div><div style="color:#9C9A92">Type / for commands</div><div class="ic" style="margin-left:auto;border-radius:8px;width:13px;height:18px"></div></div>
+<div class="a" style="left:800px;top:920px;height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;border-radius:8px;background:#3A3936;font-size:13px"><span style="font-weight:500">Fable 5.2</span><span style="color:#9C9A92">Medium</span></div>
+<div class="a" style="left:0;top:1000px;width:760px;height:44px;border-radius:12px;background:#30302E;display:flex;align-items:center;padding:0 8px">
+  <div style="padding:4px 10px;border-radius:8px;background:#45443F;font-size:13px">Pick model</div></div>
+<div class="a" style="left:1500px;top:0;width:620px;height:900px;background:#262624;border-left:1px solid rgba(222,220,209,.14)">
+  <div class="bar"><div style="font-weight:500">Model picker</div><div style="margin-left:auto;display:flex;gap:14px"><div class="ic"></div><div class="ic" style="border-radius:8px"></div></div></div></div>
+"""
 
 
-# ---------------------------------------------------------------- the ember
+def sprites():
+    """The window's parts, drawn once by Chrome and cut from one sheet."""
+    page = os.path.join(TMP, 'sheet.html')
+    shot = os.path.join(TMP, 'sheet.png')
+    open(page, 'w').write(SHEET)
+    subprocess.run([CHROME, '--headless=new', '--disable-gpu', '--hide-scrollbars', f'--force-device-scale-factor={S}',
+                    '--default-background-color=00000000', '--window-size=2200,1100', f'--screenshot={shot}',
+                    f'file://{page}'], stderr=subprocess.DEVNULL, check=True)
+    sheet = Image.open(shot).convert('RGBA')
+    cut = lambda x, y, w, h: sheet.crop((x * S, y * S, (x + w) * S, (y + h) * S))
+    return {'base': cut(0, 0, 1440, 900).convert('RGB'), 'prompt': cut(0, 920, 760, 56), 'chip': cut(800, 920, 150, 30),
+            'band': cut(0, 1000, 760, 44), 'pane': cut(1500, 0, 620, 900).convert('RGB')}
 
-RAMP = ' .:-=+*#%@'
 
+def cursor_sprite():
+    k = 2.6 * S
+    pts = [(0, 0), (0, 17), (4.5, 13), (7.6, 19.6), (10.2, 18.4), (7.2, 12), (12.6, 12)]
+    spr = Image.new('RGBA', (int(16 * k), int(23 * k)), (0, 0, 0, 0))
+    d = ImageDraw.Draw(spr)
+    at = [(2 * S + x * k, 2 * S + y * k) for x, y in pts]
+    d.polygon(at, fill=(20, 20, 19, 255))
+    d.line(at + [at[0]], fill=(255, 255, 255, 255), width=int(1.4 * S), joint='curve')
+    return spr
+
+
+def key(keys, t):
+    """A value eased between timed keys: each key is (time, *values)."""
+    if t <= keys[0][0]:
+        return keys[0][1:]
+    for a, b in zip(keys, keys[1:]):
+        if t <= b[0]:
+            f = smooth((t - a[0]) / (b[0] - a[0]))
+            return tuple(a[i] + (b[i] - a[i]) * f for i in range(1, len(a)))
+    return keys[-1][1:]
+
+
+CLICKS = [6.3, GRID_T0 + 0.95, GRID_T0 + 7.3]
+CAM = [(0, 1.0, 720, 450), (3.2, 1.0, 720, 450), (3.75, 2.3, 960, 740), (4.4, 2.3, 960, 740), (5.0, 1.7, 700, 690),
+       (6.4, 1.7, 700, 690), (7.1, 1.2, 820, 450), (7.9, 2.1, 1104, 206), (16.1, 2.1, 1104, 206), (16.9, 1.0, 720, 450),
+       (18.0, 1.0, 720, 450)]
+MOUSE = [(0, 980, 560), (3.3, 1100, 810), (4.4, 1100, 810), (5.3, 640, 610), (6.2, 397, 680), (6.45, 397, 680), (GRID_T0, 700, 600)]
+
+
+class Film:
+    def __init__(self):
+        self.spr = sprites()
+        self.cursor = cursor_sprite()
+        self.track = json.load(open(os.path.join(TMP, 'film.json')))['track']
+        self.tiles = {}
+        stage = Image.new('RGB', (W, H), (18, 18, 17))
+        glow = Image.new('L', (W, H), 0)
+        ImageDraw.Draw(glow).ellipse((300, -500, 1620, 700), fill=70)
+        stage.paste((70, 40, 28), mask=glow.filter(ImageFilter.GaussianBlur(220)))
+        x, y, w, h = VIEW
+        shadow = Image.new('L', (W, H), 0)
+        ImageDraw.Draw(shadow).rounded_rectangle((x, y + 18, x + w, y + h + 18), radius=22, fill=150)
+        stage.paste((0, 0, 0), mask=shadow.filter(ImageFilter.GaussianBlur(28)))
+        self.stage = stage
+        self.mask = Image.new('L', (w, h), 0)
+        ImageDraw.Draw(self.mask).rounded_rectangle((0, 0, w - 1, h - 1), radius=22, fill=255)
+
+    def tile(self, i):
+        i = max(0, min(len(self.track) - 1, i))
+        if i not in self.tiles:
+            self.tiles = {i: Image.open(os.path.join(TMP, 'film', f'f{i:04d}.png')).convert('RGB')}
+        return self.tiles[i]
+
+    def mouse(self, t):
+        if t < GRID_T0:
+            return key(MOUSE, t)
+        p = self.track[max(0, min(len(self.track) - 1, int((t - GRID_T0) * FPS)))]
+        return WW - PANE_W + GRID_AT[0] + p['x'], GRID_AT[1] + p['y']
+
+    def window(self, t):
+        """The app window at a moment, at twice its size."""
+        img = self.spr['base'].copy()
+        d = ImageDraw.Draw(img)
+        open_ = smooth((t - 6.45) / 0.6)
+        col = WW - PANE_W * open_
+        px = (col - 760) / 2
+        py = 680 + 30 * smooth((t - 4.5) / 0.5)
+        img.paste(self.spr['prompt'], (int(px * S), int(py * S)), self.spr['prompt'])
+        # The app's own model chip: it swells into a puff of cloud and is gone.
+        cx, cy = px + 760 - 75, 759
+        if t < 4.2:
+            grow = 1 + 0.3 * back((t - 3.6) / 0.2) if t >= 3.6 else 1.0
+            gone = smooth((t - 3.8) / 0.35)
+            paste(img, self.spr['chip'], cx * S, cy * S, grow + 0.5 * gone, 1 - gone)
+        if 3.75 <= t < 4.5:
+            k = (t - 3.75) / 0.75
+            for i in range(9):
+                ang = i * 2 * math.pi / 9 + 0.3
+                r = (26 + 46 * smooth(k * 1.4)) * (0.8 + 0.4 * ((i * 7) % 5) / 4)
+                size = (20 + 8 * (i % 3)) * (1 - 0.4 * k)
+                x, y = (cx + r * math.cos(ang) * 1.5) * S, (cy + r * math.sin(ang) * 0.7) * S
+                d.ellipse((x - size * S / 2, y - size * S / 2, x + size * S / 2, y + size * S / 2),
+                          fill=mix((38, 38, 36), (150, 148, 140), (1 - k) ** 1.5))
+        # The mod's row above the prompt, popping in.
+        if t >= 5.3:
+            paste(img, self.spr['band'], (px + 380) * S, (py - 30) * S, 0.6 + 0.4 * back((t - 5.3) / 0.3))
+        if open_ > 0:
+            img.paste(self.spr['pane'], (int(col * S), 0))
+            img.paste(self.tile(int((t - GRID_T0) * FPS)), (int((col + GRID_AT[0]) * S), GRID_AT[1] * S))
+        mx, my = self.mouse(t)
+        for at in CLICKS:
+            k = (t - at) / 0.4
+            if 0 <= k < 1:
+                r = (6 + 26 * smooth(k)) * S
+                d.ellipse((mx * S - r, my * S - r, mx * S + r, my * S + r), outline=mix((38, 38, 36), INK, 1 - k), width=3 * S)
+        img.paste(self.cursor, (int(mx * S - 2 * S), int(my * S - 2 * S)), self.cursor)
+        return img
+
+    def shot(self, t):
+        """The window as the camera sees it: zoomed toward what matters, in its frame on the stage."""
+        z, fx, fy = key(CAM, t)
+        if 7.9 <= t <= 16.1:
+            mx, my = self.mouse(t)
+            follow = 0.28 * smooth((t - 7.9) / 0.6) * (1 - smooth((t - 15.6) / 0.5))
+            fx, fy = fx + (mx - fx) * follow, fy + (my - fy) * follow
+        if t >= DROP:
+            z *= 1 + 0.07 * math.exp(-(t - DROP) * 6)
+        vw, vh = WW / z, WH / z
+        x0 = max(0, min(WW - vw, fx - vw / 2))
+        y0 = max(0, min(WH - vh, fy - vh / 2))
+        view = self.window(t).resize(VIEW[2:], Image.BICUBIC, box=(x0 * S, y0 * S, (x0 + vw) * S, (y0 + vh) * S))
+        out = self.stage.copy()
+        out.paste(view, VIEW[:2], self.mask)
+        return out
+
+
+# ------------------------------------------------------------ the opening
+
+CELL_W, CELL_H = 16, 28
 
 def glyph(level, dx, dy):
     """The mark a level of the ember wears, as the mod draws it."""
@@ -143,232 +265,70 @@ def glyph(level, dx, dy):
     return '/' if (dx > 0) == (dy < 0) else '\\'
 
 
-def noise01(c, r, t):
-    v = math.sin(c * 12.9898 + r * 78.233 + math.floor(t * 9) * 37.719) * 43758.5453
-    return v - math.floor(v)
 
-
-def ember(d, x0, y0, cols, rows, sources, ink_of, t, reach, dark=BG, swirl=0.0):
-    """Draws the ASCII ember: `sources` are (x, y, strength) points in pixels.
-
-    Each character's heat is the strongest source's glow there, so a trail is
-    just several sources along the dot's recent path.
-    """
-    for r in range(rows):
-        for c in range(cols):
-            px = x0 + c * CW
-            py = y0 + r * CH
-            heat = 0.0
-            best = None
-            for sx, sy, s in sources:
-                dist = math.hypot((px - sx) / CW, (py - sy) / CW)
-                g = max(0.0, 1 - dist / reach) ** 1.25 * s
-                if g > heat:
-                    heat = g
-                    best = (sx, sy)
-            if heat <= 0.07 or best is None:
+def marks(img, t, cx, cy, reach, core, ring=None, ring_gain=0.0):
+    """ASCII alone: a turning ember of marks about a point, and a ring of them at a radius, in character cells."""
+    d = ImageDraw.Draw(img)
+    face = font(MONO, 26)
+    for r in range(H // CELL_H + 1):
+        for c in range(W // CELL_W):
+            dx = (c * CELL_W + 8 - cx) / CELL_W
+            dy = (r * CELL_H + 14 - cy) / CELL_W
+            dist = math.hypot(dx, dy)
+            if ring is None and dist > reach:
                 continue
-            if swirl:
-                # Arms that turn about the dot, so the marks move as it grows.
-                ang = math.atan2(py - best[1], px - best[0])
-                rad = math.hypot(px - best[0], py - best[1]) / CW
-                heat = max(0.0, min(1.0, heat * (1 + swirl * math.sin(3 * ang + rad * 0.55 - t * 5.0))))
-                if heat <= 0.07:
-                    continue
-            heat *= 0.9 + 0.1 * noise01(c, r, t)
-            level = min(RAMP_LEVELS - 1, int(heat * RAMP_LEVELS))
-            dx = (px - best[0]) / CW
-            dy = (py - best[1]) / CW
-            ink = ink_of(heat)
-            colour = mix(dark, ink, 0.3 + 0.7 * heat)
-            if heat > 0.85:
-                colour = mix(colour, (255, 241, 220), (heat - 0.85) / 0.15 * 0.6)
-            d.text((px, py), glyph(level, dx, dy), font=font(MONO, 28), fill=colour, anchor='lt')
+            ang = math.atan2(dy, dx)
+            heat = max(0.0, 1 - dist / reach) ** 1.1 * (1 + 0.5 * math.sin(3 * ang + dist * 0.55 - t * 5)) * core
+            if ring is not None:
+                heat = max(heat, math.exp(-((dist - ring) / 4.5) ** 2) * (1 + 0.4 * math.sin(5 * ang - t * 6)) * ring_gain)
+            heat = min(1.0, heat)
+            if heat <= 0.07:
+                continue
+            ink = mix(hx('#FFE9A8'), hx('#E2701F'), heat ** 0.7)
+            d.text((c * CELL_W, r * CELL_H), glyph(min(9, int(heat * 10)), dx, dy), font=face,
+                   fill=mix(BG, ink, 0.3 + 0.7 * heat), anchor='lt')
 
 
-# ------------------------------------------------------------------ scenes
+def hole(radius):
+    mask = Image.new('L', (W, H), 0)
+    ImageDraw.Draw(mask).ellipse((W / 2 - radius, H / 2 - radius, W / 2 + radius, H / 2 + radius), fill=255)
+    return mask.filter(ImageFilter.GaussianBlur(10))
 
-WIN = (90, 170, 990, 1180)
 
-
-def window(img):
+def end_card(t):
+    img = Image.new('RGB', (W, H), BG)
+    marks(img, t, W / 2, 300, 9, 1.0)
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle(WIN, radius=36, fill=PANEL)
-    d.text((130, 205), 'Claude Code', font=font(SANS, 26), fill=DIM, anchor='lm')
-    for i, x in enumerate((960, 938, 916)):
-        d.ellipse((x - 7, 198, x + 7, 212), fill=QUIET)
-    return d
-
-
-def scene_hook(t):
-    """The opening: a dot already burning, growing as its ASCII turns, then opening into the window."""
-    img = Image.new('RGB', (W, H), BG)
-    d = ImageDraw.Draw(img)
-    cx, cy = 540, 640
-    g = 0.45 + 0.55 * ease_out_cubic(t / 1.9)
-    ember(d, cx - 31 * CW, cy - 21 * CH, 63, 43, [(cx, cy, 1.0)],
-          lambda h: mix(hx('#FFE9A8'), hx('#E2701F'), h ** 0.7), t, reach=10 + 12 * g, swirl=0.45)
-    k = smooth((t - 1.9) / 0.7)
-    rad = 30 + 95 * g + 1100 * k * k
-    d.ellipse((cx - rad, cy - rad, cx + rad, cy + rad), fill=mix(hx('#F08A3C'), PANEL, k))
-    if k < 0.3:
-        lit = rad * 0.45
-        d.ellipse((cx - rad * 0.2 - lit, cy - rad * 0.25 - lit, cx - rad * 0.2 + lit, cy - rad * 0.25 + lit),
-                  fill=mix(hx('#FFC38A'), hx('#F08A3C'), k / 0.3))
+    d.text((W / 2, 590), 'model-picker', font=font(f'{SANS}/AnthropicSans-Romans-Variable-25x258.ttf', 132),
+           fill=mix(BG, INK, smooth((t - 16.6) / 0.3)), anchor='mm')
+    d.text((W / 2, 740), '/plugin install model-picker --marketplace nithinaru/model-picker', font=font(MONO, 30),
+           fill=mix(BG, DIM, smooth((t - 16.9) / 0.3)), anchor='mm')
     return img
 
 
-def prompt_y(t):
-    return 640 + (930 - 640) * ease_out_cubic((t - 3.9) / 0.6)
-
-
-def scene_claude(t):
-    """A blank Claude Code window, the Fable chip popping and going, the prompt sliding down, the task bar."""
-    img = Image.new('RGB', (W, H), BG)
-    d = window(img)
-    py = prompt_y(t)
-    d.rounded_rectangle((130, py - 60, 950, py + 60), radius=30, fill=CHIP)
-    text_at(img, 'Ask Claude', font(SANS, 34), QUIET, 262, py, alpha=1.0)
-    # The Fable chip: a cloud that pops in, holds, and bursts away.
-    if 3.0 <= t < 4.1:
-        if t < 3.35:
-            s, a = ease_out_back((t - 3.0) / 0.35), 1.0
-        elif t < 3.7:
-            s, a = 1.0, 1.0
-        else:
-            k = (t - 3.7) / 0.4
-            s, a = 1.0 + 0.4 * k, 1 - k
-        chip = make_pill(430, 140, (64, 63, 60), 70)
-        text = make_text('Fable 5.2 · Medium', font(SANS, 38), INK)
-        cloud = Image.new('RGBA', chip.size, (0, 0, 0, 0))
-        cloud.alpha_composite(chip)
-        tw, th = text.size
-        cloud.alpha_composite(text, ((chip.size[0] - tw) // 2, (chip.size[1] - th) // 2))
-        paste(img, cloud, 540, 470, scale=s, alpha=a)
-    if 3.7 <= t < 4.2:
-        k = (t - 3.7) / 0.5
-        for i in range(18):
-            ang = i * 2 * math.pi / 18
-            rad = 40 + 220 * ease_out_cubic(k)
-            x = 540 + rad * math.cos(ang)
-            y = 470 + rad * 0.5 * math.sin(ang)
-            d.ellipse((x - 6, y - 6, x + 6, y + 6), fill=mix(BG, CLAY, 1 - k))
-    if t >= 4.5:
-        s = ease_out_back((t - 4.5) / 0.35)
-        pill = make_pill(800, 96, (50, 49, 46), 48)
-        pill_img = Image.new('RGBA', pill.size, (0, 0, 0, 0))
-        pill_img.alpha_composite(pill)
-        ImageDraw.Draw(pill_img).ellipse((38, 38, 58, 58), fill=CLAY + (255,))
-        pill_img.alpha_composite(make_text('model-picker', font(SANS, 34), INK), (72, 28))
-        pill_img.alpha_composite(make_text('Pick model', font(SANS, 30), CLAY), (560, 30))
-        paste(img, pill_img, 540, 1112, scale=s)
-    return img
-
-
-def dot_path(t):
-    keys = [(7.0, 0, 0), (7.6, 1, 0), (8.2, 2, 0), (8.8, 3, 0), (9.4, 4, 0), (10.0, 5, 0),
-            (10.6, 6, 0), (11.2, 6, 1), (11.8, 4, 2), (12.4, 3, 2)]
-    if t <= keys[0][0]:
-        return keys[0][1], keys[0][2]
-    for (t0, c0, r0), (t1, c1, r1) in zip(keys, keys[1:]):
-        if t <= t1:
-            f = smooth((t - t0) / (t1 - t0))
-            return c0 + (c1 - c0) * f, r0 + (r1 - r0) * f
-    return keys[-1][1], keys[-1][2]
-
-
-def cell_xy(c, r):
-    return 300 + c * 96, 450 + r * 175
-
-
-def scene_grid(t):
-    img = Image.new('RGB', (W, H), BG)
-    d = window(img)
-    d.text((130, 262), 'model-picker', font=font(SANS, 28), fill=INK, anchor='lm')
-    # Effort names across the top, the model names down the side.
-    for c, name in enumerate(COLS_NAMES):
-        d.text((cell_xy(c, 0)[0], 340), name, font=font(SANS, 22), fill=DIM, anchor='mm')
-    for r, name in enumerate(ROW_NAMES):
-        d.text((130, cell_xy(0, r)[1]), name, font=font(SANS, 26), fill=DIM, anchor='lm')
-    dc, dr = dot_path(t)
-    for c in range(7):
-        for r in range(4):
-            x, y = cell_xy(c, r)
-            allowed = (r == 0 or r == 1) or (r == 2 and c <= 3) or (r == 3 and c == 0)
-            colour = QUIET if allowed else (60, 59, 56)
-            d.ellipse((x - 4, y - 4, x + 4, y + 4), fill=colour)
-    # The ember follows the dot: the head glows, a trail of earlier positions streaks behind.
-    sources = []
-    px_now = None
-    for k, back in enumerate((0.0, 0.07, 0.14, 0.21, 0.28)):
-        c, r = dot_path(max(7.0, t - back))
-        x, y = cell_xy(c, r)
-        if k == 0:
-            px_now = (x, y)
-        sources.append((x, y, 0.95 * (0.7 ** k)))
-    speed = math.hypot(cell_xy(*dot_path(t))[0] - cell_xy(*dot_path(max(7.0, t - 0.07)))[0],
-                       cell_xy(*dot_path(t))[1] - cell_xy(*dot_path(max(7.0, t - 0.07)))[1]) / 0.07
-    energy = min(1.0, speed / 700)
-    reach = 7.6 * (1 + 0.1 * energy)
-    ink = col_ink(dc)
-    if t >= 7.0:
-        ember(d, 150, 372, 48, 25, sources, lambda h: mix(ink, (255, 241, 220), (h - 0.6) * 0.4 if h > 0.6 else 0),
-              t, reach=reach, dark=PANEL)
-    # The picked dot, larger, in the effort's colour.
-    if px_now is not None and t >= 7.0:
-        d.ellipse((px_now[0] - 18, px_now[1] - 18, px_now[0] + 18, px_now[1] + 18), fill=ink)
-    # The big effort name under the window, following the dot.
-    col_i = int(round(dc))
-    text_at(img, COLS_NAMES[min(6, max(0, col_i))], font(SANS, 64), col_ink(dc), 540, 1262,
-            alpha=smooth((t - 6.9) / 0.4) * (1 - smooth((t - 13.0) / 0.2)))
-    return img
-
-
-def scene_end(t):
-    img = Image.new('RGB', (W, H), BG)
-    grow = 0.7 + 0.3 * ease_out_cubic((t - 15.8) / 0.6)
-    cx, cy = 540, 360
-    ember(ImageDraw.Draw(img), cx - 26 * CW, cy - 7 * CH, 52, 14, [(cx, cy, 1.0)],
-          lambda h: mix(hx('#E2701F'), hx('#FFF1DC'), h), t, reach=8 * grow)
-    text_at(img, 'model-picker', font(SANS, 118), INK, 540, 610, scale=0.9 + 0.1 * ease_out_back((t - 15.8) / 0.4),
-            alpha=smooth((t - 15.8) / 0.3))
-    text_at(img, '/plugin install model-picker', font(MONO, 34), DIM, 540, 790, alpha=smooth((t - 16.3) / 0.4))
-    text_at(img, '--marketplace nithinaru/model-picker', font(MONO, 34), DIM, 540, 842, alpha=smooth((t - 16.5) / 0.4))
-    return img
-
-
-def frame(t):
-    if t < 2.6:
-        a = smooth((t - 2.15) / 0.45)
-        return Image.blend(scene_hook(t), scene_claude(2.6), a) if a > 0 else scene_hook(t)
-    if t < 6.2:
-        img = scene_claude(t)
-    elif t < 7.0:
-        a = smooth((t - 6.3) / 0.7)
-        img = Image.blend(scene_claude(6.2), scene_grid(7.0), a)
-    elif t < 15.6:
-        img = scene_grid(t)
-    else:
-        img = scene_end(t)
+def frame(film, t):
+    # The opening: ASCII alone, already burning, which bursts into a ring that uncovers the window.
+    if t < 2.15:
+        k = smooth((t - 1.3) / 0.8)
+        ring = 20 + 52 * k
+        img = Image.new('RGB', (W, H), BG)
+        if k > 0:
+            img = Image.composite(film.shot(t), img, hole((ring - 3) * CELL_W))
+        marks(img, t, W / 2, H / 2, 24 + 5 * smooth(t / 1.3), 1 - min(1.0, k * 2.2), ring if k > 0 else None, 1 - 0.4 * k)
+        return img
+    img = film.shot(t)
     if t >= DROP:
-        # The drop: the grid kicks outward once and settles, with a flash that dies in a fifth of a second.
-        k = t - DROP
-        if k < 1.6:
-            scale = 1 + 0.035 * math.exp(-k * 7)
-            img = img.resize((int(W * scale), int(H * scale)), Image.BILINEAR)
-            x0 = (img.size[0] - W) // 2
-            y0 = (img.size[1] - H) // 2
-            img = img.crop((x0, y0, x0 + W, y0 + H))
-        flash = math.exp(-k * 14) * 0.45
+        flash = math.exp(-(t - DROP) * 14) * 0.3
         if flash > 0.01:
             img = Image.blend(img, Image.new('RGB', (W, H), (255, 246, 232)), flash)
-        if 13.2 <= t < 15.6:
-            text_at(img, 'pick. drag. feel the effort.', font(SANS, 58), INK, 540, 1262,
-                    scale=1.0 + 0.3 * (1 - ease_out_back((t - 13.2) / 0.25)) if t < 13.45 else 1.0)
-    if t >= 15.6:
-        fade = smooth((t - 15.6) / 0.4)
-        if fade < 1:
-            img = Image.blend(img, Image.new('RGB', (W, H), BG), 0)  # keep the end card
+    # The ending arrives the way the film began: a ring of ASCII sweeps out, and the card is inside it.
+    if t >= 16.2:
+        k = smooth((t - 16.2) / 0.8)
+        if k >= 1:
+            return end_card(t)
+        ring = 4 + 68 * k
+        img = Image.composite(end_card(t), img, hole((ring - 3) * CELL_W))
+        marks(img, t, W / 2, H / 2, 1, 0.0, ring, 1 - 0.4 * k)
     return img
 
 
@@ -465,7 +425,7 @@ def slam():
     return np.sin(phase) * np.exp(-4 * tau) * 0.9
 
 
-def build_audio(path):
+def build_audio(path, track):
     N = int((DUR + 0.5) * SR)
     buf = np.zeros(N)
 
@@ -476,61 +436,59 @@ def build_audio(path):
             buf[i:i + n] += sig[:n] * gain
 
     def cr(t):
-        return max(0.0, min(1.0, (t - 6.0) / (DROP - 6.0))) ** 1.6 if t < DROP else 1.0
+        return max(0.0, min(1.0, (t - 5.5) / (DROP - 5.5))) ** 1.6 if t < DROP else 1.0
 
-    # Sound effects.
-    add(0.0, pop(0.5, 240))
-    add(0.0, whoosh(1.9, up=True, gain=0.35))
-    add(1.9, whoosh(0.7, up=False, gain=0.6))
-    add(3.0, pop(0.6, 340))
-    add(3.7, poof())
-    add(3.9, whoosh(0.45, up=False, gain=0.5))
-    add(4.5, pop(0.55, 380))
-    add(6.1, whoosh(0.9, up=True, gain=0.8))
-    for t in (7.6, 8.2, 8.8, 9.4, 10.0, 10.6, 11.2, 11.8, 12.4):
-        add(t, tick(), 0.9)
-    add(15.8, pop(0.7, 300))
-    add(16.3, pop(0.35, 600))
+    # What happens on screen.
+    add(0.0, whoosh(1.3, up=True, gain=0.35))
+    add(1.3, pop(0.6, 200))
+    add(1.3, whoosh(0.85, up=False, gain=0.7))
+    add(3.6, pop(0.5, 420))
+    add(3.82, poof())
+    add(4.5, whoosh(0.5, up=False, gain=0.3))
+    add(5.3, pop(0.55, 380))
+    for at in CLICKS:
+        add(at, tick(), 1.3)
+    add(6.45, whoosh(0.7, up=True, gain=0.6))
+    last = ''
+    for i, p in enumerate(track):
+        if p['cell'] and p['cell'] != last:
+            add(GRID_T0 + i / FPS, tick(), 0.8)
+        last = p['cell'] or last
+    add(16.2, pop(0.6, 200))
+    add(16.2, whoosh(0.85, up=False, gain=0.7))
 
-    # The groove: a riser and pads from 6 seconds, drums and bass from 7.
-    add(6.0, riser(DROP - 6.0))
+    # The music: pads under everything, a riser into the grid, drums from the grid, the drop on the fling.
     bar = 4 * BEAT
     chords = [(220.0, 261.6, 329.6), (174.6, 220.0, 261.6), (130.8, 164.8, 196.0), (196.0, 246.9, 293.7)]
-    for b in range(int((DUR - 6.0) / bar) + 1):
-        t = 6.0 + b * bar
+    t0 = GRID_T0 - 3 * bar
+    for b in range(40):
+        t = t0 + b * bar
         if t >= DUR - 1.0:
             break
-        add(t, chord(chords[b % 4], bar + 0.2), 0.5 + 0.5 * cr(t))
-    for j in range(int((DUR - 6.0) / (BEAT / 2)) + 1):
-        t = 6.0 + j * BEAT / 2
-        if t >= DUR - 2.0:
+        if t >= 0:
+            add(t, chord(chords[b % 4], bar + 0.2), 0.45 + 0.55 * cr(t))
+    add(5.5, riser(DROP - 5.5))
+    for j in range(200):
+        t = GRID_T0 - 2 * BEAT + j * BEAT / 2
+        if t >= DUR - 1.6:
             break
         add(t, hat(j), 0.4 + 0.6 * cr(t))
     notes = [55.0, 55.0, 65.41, 55.0, 43.65, 49.0, 41.2, 49.0]
-    k = 0
-    while True:
-        t = 7.0 + k * BEAT
-        if t >= DUR - 2.4:
+    for k in range(100):
+        t = GRID_T0 + k * BEAT
+        if t >= DUR - 1.7:
             break
-        if t < DROP - 0.02 or t >= DROP:
-            add(t, kick(), 0.9 if t < DROP else 1.1)
+        add(t, kick(), 0.9 if t < DROP - 0.02 else 1.1)
         add(t, bass(notes[k % 8], BEAT * 0.45), 0.4 + 0.6 * cr(t))
-        k += 1
-    # The drop itself.
     add(DROP, crash())
-    add(DROP, kick(), 1.2)
     add(DROP + 0.02, slam(), 0.8)
 
-    # The silence before the drop, and the fade out at the end.
-    buf *= 1.0
-    gap0, gap1 = DROP - 0.16, DROP
-    buf[int(gap0 * SR):int(gap1 * SR)] *= 0.12
-    fade0 = 16.8
+    # A breath of near silence before the drop, and the fade at the end.
+    buf[int((DROP - 0.16) * SR):int(DROP * SR)] *= 0.12
     fade = np.ones(N)
-    fi = int(fade0 * SR)
+    fi = int(16.9 * SR)
     fade[fi:] = np.linspace(1.0, 0.0, N - fi)
-    buf *= fade
-    buf = np.tanh(buf * 1.1) * 0.85
+    buf = np.tanh(buf * fade * 1.1) * 0.85
     pcm = (buf[:int(DUR * SR)] * 32767).astype('<i2')
     with wave.open(path, 'wb') as w:
         w.setnchannels(2)
@@ -540,20 +498,18 @@ def build_audio(path):
 
 
 def main():
-    wav = '/tmp/model_picker_launch.wav'
-    build_audio(wav)
+    film = Film()
+    wav = os.path.join(TMP, 'launch.wav')
+    build_audio(wav, film.track)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    total = int(DUR * FPS)
     ff = subprocess.Popen([
         'ffmpeg', '-y', '-loglevel', 'error',
-        '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{W}x{H}', '-r', str(FPS), '-i', '-',
-        '-i', wav,
-        '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p',
+        '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{W}x{H}', '-r', str(FPS), '-i', '-', '-i', wav,
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', '17', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', OUT,
     ], stdin=subprocess.PIPE)
-    for i in range(total):
-        img = frame(i / FPS)
-        ff.stdin.write(img.tobytes())
+    for i in range(int(DUR * FPS)):
+        ff.stdin.write(frame(film, i / FPS).tobytes())
     ff.stdin.close()
     ff.wait()
     print(OUT)
