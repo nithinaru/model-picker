@@ -1,10 +1,10 @@
 # model-picker
 
-A Claude mod that picks the model and effort level from a button above the prompt.
+A Claude mod that picks the model and effort level on a grid.
 
-Click the button (it shows "Pick model" or the current choice) to open the picker. Pick a model from the dropdown, pick an effort level from the row of buttons beneath it — only the levels that model supports are shown — and toggle Ultracode separately. The choice applies to every following request in the session and is remembered across sessions.
+Click the button above the prompt (it shows "Pick model" or the current choice), or type `/model-picker`. Rows are models and columns are effort levels: drag the dot, click a cell, or use the arrow keys. Cells a model does not support are dimmed and the dot is pulled back to the last level the model allows. Older models stay folded behind "More models".
 
-Until you pick a model the mod changes nothing, and the picker mirrors whatever model and effort the session is already using.
+Until you pick a cell the mod changes nothing, and the dot sits on whatever the session is already using. After a pick, the line under the grid names the model that answered your last prompt.
 
 ## Ultracode
 

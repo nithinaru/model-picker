@@ -1,36 +1,48 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelEffort, PromptSubmitInput, Register } from 'claude-code'
 
-import type { Choice, Seen } from '../types'
+import type { Choice, Seen, View } from '../types'
 
 const PANE = 'model-picker'
 const STORE_KEY = 'choice-3'
 const KEYWORD = 'ultracode'
 // Opened by the button, so it asks for the seat above the prompt.
-const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true, rows: 8 } as const
+const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true, rows: 22 } as const
 
-// The model list, in the order of the app's own menu, older models last.
-// `max` is the last effort column the model may use; the mod API lists
-// neither models nor their levels, so both are kept here by hand.
+// The model rows, in the order of the app's own menu. `max` is the last effort
+// column the model may use; `isOlder` rows stay folded behind "More models".
+// The mod API lists neither models nor their levels, so both are kept here by
+// hand, and the ids of the older models are the naming pattern's best guess.
 const MODELS = [
-  { key: 'opus-5-5', label: 'Opus 5.5', id: 'claude-opus-5-5', family: 'opus', max: 5 },
-  { key: 'fable-5-2', label: 'Fable 5.2', id: 'claude-fable-5-2', family: 'fable', max: 5 },
-  { key: 'sonnet-5-5', label: 'Sonnet 5.5', id: 'claude-sonnet-5-5', family: 'sonnet', max: 3 },
-  { key: 'haiku-5-5', label: 'Haiku 5.5', id: 'claude-haiku-5-5', family: 'haiku', max: 0 },
-  { key: 'opus-5', label: 'Opus 5', id: 'claude-opus-5', family: null, max: 4 },
-  { key: 'sonnet-5', label: 'Sonnet 5', id: 'claude-sonnet-5', family: null, max: 3 },
+  { key: 'opus-5-5', label: 'Opus 5.5', id: 'claude-opus-5-5', family: 'opus', max: 5, isOlder: false },
+  { key: 'fable-5-2', label: 'Fable 5.2', id: 'claude-fable-5-2', family: 'fable', max: 5, isOlder: false },
+  { key: 'sonnet-5-5', label: 'Sonnet 5.5', id: 'claude-sonnet-5-5', family: 'sonnet', max: 3, isOlder: false },
+  { key: 'haiku-5-5', label: 'Haiku 5.5', id: 'claude-haiku-5-5', family: 'haiku', max: 0, isOlder: false },
+  { key: 'sonnet-5', label: 'Sonnet 5', id: 'claude-sonnet-5', family: null, max: 3, isOlder: true },
+  { key: 'opus-5', label: 'Opus 5', id: 'claude-opus-5', family: null, max: 4, isOlder: true },
+  { key: 'fable-5', label: 'Fable 5', id: 'claude-fable-5', family: null, max: 4, isOlder: true },
+  { key: 'opus-4-8', label: 'Opus 4.8', id: 'claude-opus-4-8', family: null, max: 4, isOlder: true },
+  { key: 'opus-4-7', label: 'Opus 4.7', id: 'claude-opus-4-7', family: null, max: 4, isOlder: true },
+  { key: 'opus-4-6', label: 'Opus 4.6', id: 'claude-opus-4-6', family: null, max: 3, isOlder: true },
+  { key: 'sonnet-4-6', label: 'Sonnet 4.6', id: 'claude-sonnet-4-6', family: null, max: 3, isOlder: true },
 ] as const
 
 // The effort levels, named as the app's own effort menu names them. Default
 // sends no level of the mod's own, so the session's setting stands.
 const EFFORTS = [
-  { key: 'default', label: 'Default', level: undefined },
-  { key: 'low', label: 'Low', level: 'low' },
-  { key: 'medium', label: 'Medium', level: 'medium' },
-  { key: 'high', label: 'High', level: 'high' },
-  { key: 'xhigh', label: 'Extra high', level: 'xhigh' },
-  { key: 'max', label: 'Max', level: 'max' },
-] as const satisfies readonly { key: string; label: string; level?: ModelEffort }[]
+  { key: 'default', label: 'Default', short: 'Def', tiny: 'D', level: undefined },
+  { key: 'low', label: 'Low', short: 'Low', tiny: 'L', level: 'low' },
+  { key: 'medium', label: 'Medium', short: 'Med', tiny: 'M', level: 'medium' },
+  { key: 'high', label: 'High', short: 'High', tiny: 'H', level: 'high' },
+  { key: 'xhigh', label: 'Extra', short: 'Xtra', tiny: 'X', level: 'xhigh' },
+  { key: 'max', label: 'Max', short: 'Max', tiny: 'Mx', level: 'max' },
+] as const satisfies readonly {
+  key: string
+  label: string
+  short: string
+  tiny: string
+  level?: ModelEffort
+}[]
 
 const INITIAL: Choice = { model: MODELS[0].key, effort: 'default', isUltra: false, isOn: false }
 // Bump both tags when Choice's fields change.
@@ -43,6 +55,12 @@ const seen = atom(
   { shape: 'seen-1' },
 )
 
+const view = atom(
+  { plugin: 'model-picker', key: 'view' } as const,
+  { isExpanded: false, ran: null } as View,
+  { shape: 'view-1' },
+)
+
 const modelOf = (key: string) => MODELS.find(model => model.key === key) ?? MODELS[0]
 const effortOf = (key: string) => EFFORTS.find(effort => effort.key === key) ?? EFFORTS[0]
 
@@ -50,7 +68,9 @@ const effortOf = (key: string) => EFFORTS.find(effort => effort.key === key) ?? 
 export const modelKeyFor = (name: string | null) => {
   if (name === null) return MODELS[0].key
   const lower = name.toLowerCase()
-  const exact = MODELS.find(model => lower.startsWith(model.id))
+  const exact = [...MODELS]
+    .sort((a, b) => b.id.length - a.id.length)
+    .find(model => lower.startsWith(model.id))
   if (exact !== undefined) return exact.key
 
   return MODELS.find(model => model.family !== null && lower.includes(model.family))?.key ?? MODELS[0].key
@@ -145,69 +165,89 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const now = await read($, choice)
     const session = await read($, seen)
-    // Until a model is picked, the menu defaults to the session's own model.
+    const showing = await read($, view)
+    // Until a cell is picked, the dot sits where the session already is.
     const modelKey = now.isOn ? now.model : modelKeyFor(session.model)
-    const effortKey = now.isOn ? now.effort : clampEffort(modelKey, session.effort ?? 'default')
-    const model = modelOf(modelKey)
+    const effortKey = clampEffort(modelKey, now.isOn ? now.effort : (session.effort ?? 'default'))
+    // An older model that is the pick is shown whether or not the rest are.
+    const rows = MODELS.filter(one => !one.isOlder || showing.isExpanded || one.key === modelKey)
+    const at = {
+      row: Math.max(0, rows.findIndex(one => one.key === modelKey)),
+      col: Math.max(0, EFFORTS.findIndex(one => one.key === effortKey)),
+    }
+    const ran = showing.ran === null ? null : modelOf(modelKeyFor(showing.ran))
 
-    const set = async (next: Partial<Choice>) => {
-      const to = await update($, choice, was => ({
-        model: was.isOn ? was.model : modelKey,
-        effort: was.isOn ? was.effort : effortKey,
-        isUltra: was.isUltra,
-        isOn: true,
-        ...next,
-      }))
-      await $.store.set(STORE_KEY, to)
+    if (e.surface !== 'desktop' && e.surface !== 'terminal') {
+      const { Box, Text } = $.ui.resolve(e)
+
+      return (
+        <Box flexDirection="column">
+          <Text bold>{now.isOn ? describe(now) : 'Using the session model'}</Text>
+          <Text dimColor>The grid needs the desktop app or a terminal.</Text>
+        </Box>
+      )
     }
 
-    const { Box, Text, Button, Select } = $.ui.resolve(e)
+    const { Box, Text, Client } = $.ui.resolve(e)
+    const labelWidth = 13
+    const room = Math.max(0, e.props.bodyColumns - 6 - labelWidth)
+    const cell = Math.max(3, Math.min(9, Math.floor(room / EFFORTS.length)))
+    const cols = EFFORTS.map(one => (cell >= 8 ? one.label : cell >= 5 ? one.short : one.tiny))
 
     return (
       <Box flexDirection="column" paddingX={1} gap={1}>
-        <Box flexDirection="row" justifyContent="space-between">
-          <Text size="heading" bold>
-            {model.label}
-          </Text>
-          <Box flexDirection="row" gap={1}>
-            {now.isUltra && <Text color="claude">Ultracode</Text>}
-            <Text color={now.isOn ? 'claude' : 'inactive'}>{effortOf(effortKey).label}</Text>
-          </Box>
-        </Box>
-        <Select
-          key="model"
-          label="Model"
-          value={modelKey}
-          options={MODELS.map(one => ({ value: one.key, label: one.label }))}
-          onSelect={value => {
-            const to = modelOf(value)
-
-            void set({ model: to.key, effort: clampEffort(to.key, effortKey) })
+        <Client
+          key="grid"
+          module="./grid.tsx"
+          props={{
+            rows: rows.map(one => ({ key: one.key, label: one.label, max: one.max })),
+            cols,
+            levels: EFFORTS.map(one => one.label),
+            at,
+            isUltra: now.isUltra,
+            isOn: now.isOn,
+            hasMore: true,
+            isExpanded: showing.isExpanded,
+            labelWidth,
+            cell,
           }}
-        />
-        <Box flexDirection="row" gap={1}>
-          {EFFORTS.filter(effort => EFFORTS.findIndex(one => one.key === effort.key) <= model.max).map(
-            effort => (
-              <Button
-                key={`effort-${effort.key}`}
-                label={effort.label}
-                variant={effortKey === effort.key ? 'primary' : 'secondary'}
-                onPress={() => void set({ effort: effort.key })}
-              />
-            ),
-          )}
-        </Box>
-        <Button
-          key="ultra"
-          label={now.isUltra ? 'Ultracode on' : 'Ultracode off'}
-          variant={now.isUltra ? 'primary' : 'secondary'}
-          onPress={() => void set({ isUltra: !now.isUltra })}
+          width={labelWidth + cell * EFFORTS.length + 4}
+          height={5 + rows.length * 2 + 2 + 2}
         />
         <Text dimColor>
-          {now.isOn ? 'Applies to every prompt in this session.' : 'Pick a model to turn this on.'}
+          {!now.isOn
+            ? 'Drag the dot, or click a cell. Nothing changes until you do.'
+            : ran === null
+              ? 'Set. Your next prompt uses it.'
+              : `Last answer came from ${ran.label}.`}
         </Text>
       </Box>
     )
+  })
+
+  // A pick from the grid. The data comes from the drawing surface: check it.
+  on('ui.message', async ($, e, next) => {
+    if (e.requestId !== PANE || e.element !== 'grid') return next(e)
+    const data = e.data as { model?: unknown; col?: unknown; isUltra?: unknown; expand?: unknown } | null
+    if (typeof data?.expand === 'boolean') {
+      const isExpanded = data.expand
+      await update($, view, was => ({ ...was, isExpanded }))
+
+      return {}
+    }
+    const model = MODELS.find(one => one.key === data?.model)
+    if (model === undefined || typeof data?.col !== 'number' || !Number.isFinite(data.col)) return {}
+    const effort = EFFORTS[Math.max(0, Math.min(model.max, Math.trunc(data.col)))] ?? EFFORTS[0]
+    const to: Choice = {
+      model: model.key,
+      effort: effort.key,
+      isUltra: data.isUltra === true,
+      isOn: true,
+    }
+    await update($, choice, () => to)
+    await $.store.set(STORE_KEY, to)
+
+    return {}
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -232,7 +272,13 @@ export const register: Register = on => {
       return yield* next(e)
     }
     const { model, effort } = requestFor(now, { model: e.model, effort: e.effort })
+    const response = yield* next({ ...e, model, effort })
+    // The proof: the model the API says answered, shown under the grid.
+    const ran = response.usage?.model ?? null
+    if (ran !== null && (await read($, view)).ran !== ran) {
+      await update($, view, was => ({ ...was, ran }))
+    }
 
-    return yield* next({ ...e, model, effort })
+    return response
   })
 }
