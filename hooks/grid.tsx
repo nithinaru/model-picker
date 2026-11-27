@@ -43,17 +43,19 @@ const TEXT = 'text'
 const QUIET = 'inactive'
 const OFF = 'subtle'
 
-// The ember's colour by effort, Default to Ultracode: cool at low effort, hot
-// at Max, violet for Ultracode. A mod cannot tell a light theme from a dark
-// one, so every colour here reads on both, and heat is told by hue with `dim`
-// and `bold`, which each theme draws its own way.
-const EDGE = ['#B0AEA5', '#8FB8EE', '#7FA6EC', '#9A93E8', '#C07FD0', '#D8688F', '#E0705A']
-const CORE = ['#8C8A82', '#4F8FDB', '#6E7FE6', '#A46CCB', '#D05E8E', '#D97757', '#8E82E6']
+// The ember's colour by effort, left to right: blue for Default, then grey at
+// Low warming through yellow to orange at Max, and purple for Ultracode. A mod
+// cannot tell a light theme from a dark one, so every colour here reads on
+// both, and heat is told by hue with `dim` and `bold`, which each theme draws
+// its own way.
+const EDGE = ['#8FB8EE', '#B0AEA5', '#C9C08A', '#E6CC6A', '#EDB45A', '#F0A06A', '#B3AAF0']
+const CORE = ['#4F8FDB', '#8C8A82', '#B7A648', '#E0B93A', '#E8962A', '#E2701F', '#8E82E6']
 const LEVELS = 10
 
 const ASPECT = 2.4 // a screen line is about this many characters tall
-const RADIUS = 6.2 // the ember's reach at rest, in character widths: round on screen
-const SWELL = 0.7 // how much further it reaches at full speed, as a share of RADIUS
+const RADIUS = 5.4 // the ember's reach at rest, in character widths: round on screen
+const SWELL = 0.8 // stretch along the way it moves: an oval, not a circle
+const STRETCH = 0.55 // how much further it reaches at full speed, as a share of RADIUS
 const EASE = 0.5 // how much of the way to its dot the glow glides each step
 const STEP_MS = 70 // the glide's clock; at rest the ember redraws every other step
 
@@ -78,6 +80,8 @@ let beat = 0
 // How hard the dot is moving, 0 to 1: it rises with speed and ebbs at rest.
 // The ember swells with it, so more marks come in, coloured, as you drag.
 let energy = 0
+// The way the dot is moving, as a unit vector in character space; null at rest.
+let heading: Point | null = null
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 const apart = (a: Point, b: Point) => Math.hypot(a.x - b.x, (a.y - b.y) * ASPECT)
@@ -113,6 +117,9 @@ const step = () => {
   }
   const moved = head !== null && last !== null ? apart(head, last) : 0
   if (moved > 0.4) trail = [{ ...last!, a: 0.8 }, ...trail].slice(0, 10)
+  if (moved > 0.4 && head !== null && last !== null) {
+    heading = { x: (head.x - last.x) / moved, y: ((head.y - last.y) * ASPECT) / moved }
+  }
   last = head
   // Rises fast with movement, falls back slowly once still.
   energy = moved > 0.4 ? Math.min(1, energy + moved * 0.09) : energy * 0.88
@@ -172,6 +179,7 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     last = null
     trail = []
     energy = 0
+    heading = null
     stopSettle?.()
     stopSettle = null
     stopClock?.()
@@ -365,8 +373,20 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
   const heat = (x: number, y: number) => {
     if (head === null) return 0
     const reach = RADIUS * (1 + SWELL * energy)
-    let most = Math.max(0, 1 - apart(head, { x, y }) / reach)
-    for (const point of trail) most = Math.max(most, point.a * Math.max(0, 1 - apart(point, { x, y }) / (reach * 0.8)))
+    // Distance that is longer across the way of travel than along it, so the
+    // ember stretches into an oval, leaning ahead of the dot as it moves.
+    const oval = (from: Point, at: number) => {
+      const dx = x - from.x
+      const dy = (y - from.y) * ASPECT
+      const along = heading === null ? 0 : dx * heading.x + dy * heading.y
+      const across = heading === null ? Math.hypot(dx, dy) : Math.abs(-dx * heading.y + dy * heading.x)
+      const stretch = 1 + STRETCH * energy
+      const d = heading === null ? Math.hypot(dx, dy) : Math.hypot(along / stretch, across)
+
+      return Math.max(0, 1 - d / (reach * at))
+    }
+    let most = oval(head, 1)
+    for (const point of trail) most = Math.max(most, point.a * oval(point, 0.8))
     return most
   }
   /** One cell of the ember, or null where it does not reach. */
