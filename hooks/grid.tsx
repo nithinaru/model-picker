@@ -222,9 +222,12 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
   const ramp: Ink[] = Array.from({ length: LEVELS }, (_, level) => {
     // The session's own setting, before any pick, burns with no colour.
     if (!isMine) return level < 3 ? { color: OFF } : level < 7 ? { color: QUIET, dim: true } : { color: QUIET }
-    const color = mix(edge, core, level / (LEVELS - 1))
+    // The outer marks lift toward a pale yellow, so an orange edge reads as
+    // yellow-cream at the rim and deepens to its own hue at the core.
+    const outer = 1 - level / (LEVELS - 1)
+    const color = mix(mix(edge, '#FFF0B3', 0.5 * outer), core, level / (LEVELS - 1))
 
-    return level < 3 ? { color, dim: true } : level === LEVELS - 1 ? { color, bold: true } : { color }
+    return level === LEVELS - 1 ? { color, bold: true } : { color }
   })
 
   // A level a model does not offer is pulled back to the last one it has.
