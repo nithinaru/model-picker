@@ -161,111 +161,110 @@ const main = async () => {
     y: given.head.length + 1 + row * given.pitch,
   })
 
-  // `--film`: the grid driven by a scripted cursor at 30 frames a second, for
-  // the launch video. Writes pages of frames and the cursor's track beside them.
+  // `--film`: the grid in a hand's control at 60 frames a second, for the
+  // launch video. The dot starts on Sonnet 5.5, is dragged to Opus 5.5 at
+  // Default, rests, then is dragged to Fable 5.2 at Ultracode. The hand moves
+  // the way hands do: curved paths, fast in the middle, a small overshoot and
+  // correction at the end, and a tremor that never quite stops.
   if (process.argv.includes('--film')) {
     inks = INKS.dark ?? {}
     const shape = shapeFor(66, 30)
-    const grid = mount({ ...shape, isOn: false, at: { row: 0, col: 2 } })
     const top = shape.head.length + 1
-    const mid = (row: number, col: number, t: number) => ({
-      t,
+    const dotAt = (row: number, col: number) => ({
       x: (shape.labelWidth + shape.cell * col + Math.floor(shape.cell / 2)) * CW + CW / 2,
       y: (top + row * shape.pitch) * RH + RH / 2,
     })
-    // The drag: one steady pace along a path with rounded corners, reaching Ultracode 5.8 seconds in.
-    const cells: [number, number][] = [[0, 2], [0, 5], [1, 5], [1, 2], [2, 2], [2, 3], [1, 3], [1, 6], [0, 6], [0, 5], [1, 5]]
-    let path = cells.map(([row, col]) => mid(row, col, 0))
-    for (let pass = 0; pass < 2; pass++) {
-      const next = [path[0]!]
-      for (let i = 0; i + 1 < path.length; i++) {
-        const a = path[i]!
-        const b = path[i + 1]!
-        next.push({ t: 0, x: a.x * 0.8 + b.x * 0.2, y: a.y * 0.8 + b.y * 0.2 }, { t: 0, x: a.x * 0.2 + b.x * 0.8, y: a.y * 0.2 + b.y * 0.8 })
-      }
-      next.push(path.at(-1)!)
-      path = next
+    const FPS = 60
+    const N = 540
+    const pos: { x: number; y: number }[] = []
+    let here = { x: -260, y: 520 }
+    const hold = (sec: number) => {
+      for (let k = 0; k < Math.round(sec * FPS); k++) pos.push({ ...here })
     }
-    const far = [0]
-    for (let i = 1; i < path.length; i++) far.push(far[i - 1]! + Math.hypot(path[i]!.x - path[i - 1]!.x, path[i]!.y - path[i - 1]!.y))
-    const total = far.at(-1)!
-    const ultra = mid(1, 6, 0)
-    // The rounded path passes beside the Ultracode cell, not through it: take its nearest point.
-    let toUltra = total
-    let near = Infinity
-    for (let i = 0; i < path.length; i++) {
-      const gap = Math.hypot(path[i]!.x - ultra.x, path[i]!.y - ultra.y)
-      if (gap < near) {
-        near = gap
-        toUltra = far[i]!
+    /** A reach from here to a point: a slight arc, quick in the middle, past it by a little, then back. */
+    const reach = (to: { x: number; y: number }, sec: number, arc: number, over: number) => {
+      const from = here
+      const dx = to.x - from.x
+      const dy = to.y - from.y
+      const past = { x: to.x + dx * over, y: to.y + dy * over }
+      const n = Math.round(sec * FPS)
+      for (let k = 1; k <= n; k++) {
+        const u = k / n
+        const e = u * u * u * (10 - 15 * u + 6 * u * u)
+        const bend = arc * Math.sin(Math.PI * e)
+        pos.push({ x: from.x + (past.x - from.x) * e - dy * bend, y: from.y + (past.y - from.y) * e + dx * bend })
+      }
+      here = past
+      const m = Math.round(0.15 * FPS)
+      for (let k = 1; k <= m; k++) {
+        const u = k / m
+        const e = u * u * (3 - 2 * u)
+        pos.push({ x: past.x + (to.x - past.x) * e, y: past.y + (to.y - past.y) * e })
+      }
+      here = to
+    }
+    const events: { frame: number; kind: 'down' | 'up'; lands?: { row: number; col: number }; says?: string }[] = []
+    const mark = (kind: 'down' | 'up', lands?: { row: number; col: number }, says?: string) =>
+      events.push({ frame: pos.length, kind, lands, says })
+    const sonnet = dotAt(2, 2)
+    const opus = dotAt(1, 0)
+    const fable = dotAt(0, 6)
+    reach({ x: sonnet.x + 2, y: sonnet.y + 1 }, 0.62, 0.1, 0.05)
+    hold(0.12)
+    mark('down')
+    reach({ x: opus.x - 1, y: opus.y + 1 }, 0.58, -0.12, 0.06)
+    hold(0.08)
+    mark('up', { row: 1, col: 0 }, 'Default keeps the session’s effort level. Set. Your next prompt uses it.')
+    reach({ x: opus.x + 14, y: opus.y + 9 }, 0.35, 0.2, 0)
+    hold(0.4)
+    reach({ x: opus.x + 1, y: opus.y }, 0.3, -0.15, 0.02)
+    hold(0.06)
+    mark('down')
+    reach({ x: fable.x + 1, y: fable.y - 1 }, 0.92, 0.14, 0.035)
+    const drop = pos.length / FPS - 0.15
+    hold(0.2)
+    mark('up', { row: 0, col: 6 }, 'Ultracode sends Max effort and adds the word ultracode to each prompt. Set. Your next prompt uses it.')
+    reach({ x: fable.x + 70, y: fable.y + 64 }, 0.8, -0.1, 0)
+    while (pos.length < N) hold(0.1)
+    // A tremor that never stops: small, slow, and different on each axis.
+    const tremor = (i: number) => {
+      const t = i / FPS
+      return {
+        x: 0.7 * Math.sin(t * 7.3) + 0.4 * Math.sin(t * 13.1 + 1.7),
+        y: 0.6 * Math.sin(t * 6.1 + 0.9) + 0.35 * Math.sin(t * 11.7 + 2.3),
       }
     }
-    const DOWN = 0.9
-    const GO = 1.0
-    const RAMP = 0.3 // seconds to reach the drag's pace, and to come off it
-    const pace = toUltra / (5.8 - GO - RAMP / 2)
-    const cruise = total / pace
-    const UP = GO + cruise + RAMP + 0.12
-    /** How far along the path the dot is, a time after it sets off: up to pace, steady, then down from it. */
-    const gone = (t: number) => {
-      if (t <= 0) return 0
-      if (t < RAMP) return (pace * t * t) / (2 * RAMP)
-      if (t < cruise) return pace * (t - RAMP / 2)
-      const late = Math.min(RAMP, t - cruise)
-
-      return pace * (cruise - RAMP / 2) + pace * (late - (late * late) / (2 * RAMP))
-    }
-    const start = { x: -144, y: 528 }
-    const rest = { x: 330, y: 300 }
-    const where = (t: number) => {
-      const ease = (f: number) => f * f * (3 - 2 * Math.max(0, Math.min(1, f)))
-      if (t < GO) {
-        const f = ease(Math.min(1, t / 0.8))
-
-        return { x: start.x + (path[0]!.x - start.x) * f, y: start.y + (path[0]!.y - start.y) * f }
-      }
-      if (t >= UP) {
-        const f = ease(Math.min(1, (t - UP - 0.15) / 0.9))
-        const end = path.at(-1)!
-
-        return { x: end.x + (rest.x - end.x) * Math.max(0, f), y: end.y + (rest.y - end.y) * Math.max(0, f) }
-      }
-      const d = Math.min(total, gone(t - GO))
-      let i = 1
-      while (i < far.length - 1 && far[i]! < d) i++
-      const f = (d - far[i - 1]!) / (far[i]! - far[i - 1]! || 1)
-
-      return { x: path[i - 1]!.x + (path[i]!.x - path[i - 1]!.x) * f, y: path[i - 1]!.y + (path[i]!.y - path[i - 1]!.y) * f }
-    }
+    const grid = mount({ ...shape, isOn: true, at: { row: 2, col: 2 } })
     const frames: string[] = []
     const track: { x: number; y: number; down: boolean; cell: string }[] = []
-    let clock = 0
     let held = false
-    let says = 'Following the session. Click a cell or drag the dot to choose a model and effort.'
-    for (let i = 0; i < 540; i++) {
-      const t = i / 60
-      const p = where(t)
+    let says = 'Last answer came from Sonnet 5.5.'
+    for (let i = 0; i < N; i++) {
+      const q = pos[i]!
+      const w = tremor(i)
+      const p = { x: q.x + w.x, y: q.y + w.y }
       const e = { x: Math.floor(p.x / CW), y: Math.floor(p.y / RH), fine: { x: p.x / CW, y: p.y / RH } }
-      if (!held && t >= DOWN && t < UP) {
-        grid.point({ type: 'down', ...e, button: 'left' } as Pointer)
-        held = true
-      } else if (held && t >= UP) {
-        grid.point({ type: 'up', ...e, button: 'left' } as Pointer)
-        held = false
-        grid.set({ at: { row: 1, col: 5 }, isOn: true })
-        says = 'Set. Your next prompt uses it.'
-      } else grid.point((held ? { type: 'move', ...e, button: 'left' } : { type: 'move', ...e }) as Pointer)
-      // The grid's own clock steps sixty times a second.
-      while (clock + 1 / 60 <= t + 1e-9) {
-        clock += 1 / 60
-        grid.tick(1)
+      for (const ev of events.filter(one => one.frame === i)) {
+        if (ev.kind === 'down') {
+          grid.point({ type: 'down', ...e, button: 'left' } as Pointer)
+          held = true
+        } else {
+          grid.point({ type: 'up', ...e, button: 'left' } as Pointer)
+          held = false
+          if (ev.lands) grid.set({ at: ev.lands, isOn: true })
+          if (ev.says) says = ev.says
+        }
       }
+      if (held) grid.point({ type: 'move', ...e, button: 'left' } as Pointer)
+      else grid.point({ type: 'move', ...e } as Pointer)
+      grid.tick(1)
       frames.push(`<div style="width:560px;height:330px;box-sizing:border-box;background:${inks.page};overflow:hidden;flex-shrink:0">
         ${grid.render()}<div style="color:${inks.inactive};margin-top:${RH}px">${esc(says)}</div></div>`)
       const cell = `${Math.round((p.y / RH - top) / shape.pitch)}:${Math.floor((p.x / CW - shape.labelWidth) / shape.cell)}`
-      track.push({ x: Math.round(p.x), y: Math.round(p.y), down: held, cell: held ? cell : '' })
+      track.push({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, down: held, cell: held ? cell : '' })
     }
-    writeFileSync('tools/out/film.json', JSON.stringify({ fps: 60, track, down: DOWN, up: UP }))
+    const at = (kind: string) => events.filter(one => one.kind === kind).map(one => one.frame / FPS)
+    writeFileSync('tools/out/film.json', JSON.stringify({ fps: FPS, track, downs: at('down'), ups: at('up'), drop }))
     for (let page = 0; page * 90 < frames.length; page++) {
       writeFileSync(`tools/out/film${page}.html`, `<!doctype html><meta charset="utf-8">${FACE}<body style="background:${inks.page}">
       <div style="display:flex;flex-wrap:wrap;width:5600px">${frames.slice(page * 90, page * 90 + 90).join('')}</div></body>`)

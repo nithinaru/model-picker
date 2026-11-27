@@ -4,7 +4,7 @@ Pick Claude Code's model and effort level on a grid, with one dot.
 
 ![Dragging the dot across models and effort levels; the ember around it changes colour with the effort](assets/demo.gif)
 
-[Watch the 18-second launch video](assets/launch.mp4)
+[Watch the 15-second launch video](assets/launch.mp4)
 
 ## Install
 

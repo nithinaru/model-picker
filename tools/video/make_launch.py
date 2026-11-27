@@ -19,11 +19,12 @@ import wave
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-W, H, FPS, DUR, SR = 1920, 1080, 60, 18.0, 44100
-GRID_T0 = 7.2  # when the grid's own frames start playing
+W, H, FPS, DUR, SR = 1920, 1080, 60, 15.0, 44100
+GRID_T0 = 5.2  # when the grid's own frames start playing
+GRID_END = 12.0  # when the camera leaves the grid
 BPM = 124.0
 BEAT = 60.0 / BPM
-DROP = GRID_T0 + 12 * BEAT  # the drop lands as the dot reaches Ultracode
+DROP = GRID_T0 + 3.6  # set from the film: the drop lands as the dot reaches Ultracode
 
 SANS = '/Applications/Claude.app/Contents/Resources/fonts'
 MONO = '/System/Library/Fonts/Menlo.ttc'
@@ -158,11 +159,11 @@ def key(keys, t):
     return keys[-1][1:]
 
 
-CLICKS = [6.3, GRID_T0 + 0.95, GRID_T0 + 7.3]
-CAM = [(0, 1.0, 720, 450), (3.2, 1.0, 720, 450), (3.75, 2.3, 960, 740), (4.4, 2.3, 960, 740), (5.0, 1.7, 700, 690),
-       (6.4, 1.7, 700, 690), (7.1, 1.2, 820, 450), (7.9, 2.1, 1104, 206), (16.1, 2.1, 1104, 206), (16.9, 1.0, 720, 450),
-       (18.0, 1.0, 720, 450)]
-MOUSE = [(0, 980, 560), (3.3, 1100, 810), (4.4, 1100, 810), (5.3, 640, 610), (6.2, 397, 680), (6.45, 397, 680), (GRID_T0, 700, 600)]
+CLICKS = [4.4]
+CAM = [(0, 1.0, 720, 450), (1.9, 1.0, 720, 450), (2.3, 2.3, 960, 740), (2.95, 2.3, 960, 740), (3.5, 1.7, 700, 690),
+       (4.4, 1.7, 700, 690), (4.95, 1.2, 820, 450), (5.6, 2.1, 1104, 206), (GRID_END, 2.1, 1104, 206),
+       (GRID_END + 0.6, 1.0, 720, 450), (DUR, 1.0, 720, 450)]
+MOUSE = [(0, 980, 560), (1.9, 1100, 810), (2.9, 1100, 810), (3.7, 640, 610), (4.3, 397, 680), (4.55, 397, 680), (GRID_T0, 700, 600)]
 
 
 class Film:
@@ -171,7 +172,9 @@ class Film:
         self.cursor, self.tip = cursor_sprite()
         told = json.load(open(os.path.join(TMP, 'film.json')))
         self.track = told['track']
-        CLICKS[1:] = [GRID_T0 + told['down'], GRID_T0 + told['up']]
+        global DROP
+        DROP = GRID_T0 + told['drop']
+        CLICKS[1:] = [GRID_T0 + d for d in told['downs']]
         self.tiles = {}
         stage = Image.new('RGB', (W, H), (18, 18, 17))
         glow = Image.new('L', (W, H), 0)
@@ -193,7 +196,8 @@ class Film:
 
     def mouse(self, t):
         if t < GRID_T0:
-            return key(MOUSE, t)
+            x, y = key(MOUSE, t)
+            return x + 0.8 * math.sin(t * 7.3) + 0.4 * math.sin(t * 13.1 + 1.7), y + 0.6 * math.sin(t * 6.1 + 0.9)
         p = self.track[max(0, min(len(self.track) - 1, int((t - GRID_T0) * FPS)))]
         return WW - PANE_W + GRID_AT[0] + p['x'], GRID_AT[1] + p['y']
 
@@ -201,22 +205,22 @@ class Film:
         """The app window at a moment, at twice its size."""
         img = self.spr['base'].copy()
         d = ImageDraw.Draw(img)
-        open_ = smooth((t - 6.45) / 0.6)
+        open_ = smooth((t - 4.55) / 0.55)
         col = WW - PANE_W * open_
         px = (col - 760) / 2
-        py = 680 + 30 * smooth((t - 4.5) / 0.5)
+        py = 680 + 30 * smooth((t - 3.2) / 0.5)
         img.paste(self.spr['prompt'], (int(px * S), int(py * S)), self.spr['prompt'])
         # The app's own model chip: it swells into a puff of cloud and is gone.
         cx, cy = px + 760 - 64 - 14 - 75, 759
         # The app's Auto and usage ring sit beside the chip, and move into the mod's row when it arrives.
-        if t < 4.8:
-            paste(img, self.spr['auto'], (px + 760 - 32) * S, cy * S, 1.0, 1 - smooth((t - 4.45) / 0.3))
-        if t < 4.2:
-            grow = 1 + 0.3 * back((t - 3.6) / 0.2) if t >= 3.6 else 1.0
-            gone = smooth((t - 3.8) / 0.35)
+        if t < 3.5:
+            paste(img, self.spr['auto'], (px + 760 - 32) * S, cy * S, 1.0, 1 - smooth((t - 3.15) / 0.3))
+        if t < 2.9:
+            grow = 1 + 0.3 * back((t - 2.3) / 0.2) if t >= 2.3 else 1.0
+            gone = smooth((t - 2.5) / 0.35)
             paste(img, self.spr['chip'], cx * S, cy * S, grow + 0.5 * gone, 1 - gone)
-        if 3.75 <= t < 4.5:
-            k = (t - 3.75) / 0.75
+        if 2.45 <= t < 3.2:
+            k = (t - 2.45) / 0.75
             for i in range(9):
                 ang = i * 2 * math.pi / 9 + 0.3
                 r = (26 + 46 * smooth(k * 1.4)) * (0.8 + 0.4 * ((i * 7) % 5) / 4)
@@ -225,8 +229,8 @@ class Film:
                 d.ellipse((x - size * S / 2, y - size * S / 2, x + size * S / 2, y + size * S / 2),
                           fill=mix((38, 38, 36), (150, 148, 140), (1 - k) ** 1.5))
         # The mod's row above the prompt, popping in.
-        if t >= 5.3:
-            paste(img, self.spr['band'], (px + 380) * S, (py - 30) * S, 0.6 + 0.4 * back((t - 5.3) / 0.3))
+        if t >= 3.6:
+            paste(img, self.spr['band'], (px + 380) * S, (py - 30) * S, 0.6 + 0.4 * back((t - 3.6) / 0.3))
         if open_ > 0:
             img.paste(self.spr['pane'], (int(col * S), 0))
             img.paste(self.tile(int((t - GRID_T0) * FPS)), (int((col + GRID_AT[0]) * S), GRID_AT[1] * S))
@@ -242,9 +246,9 @@ class Film:
     def shot(self, t):
         """The window as the camera sees it: zoomed toward what matters, in its frame on the stage."""
         z, fx, fy = key(CAM, t)
-        if 7.9 <= t <= 16.1:
+        if 5.6 <= t <= GRID_END:
             mx, my = self.mouse(t)
-            follow = 0.28 * smooth((t - 7.9) / 0.6) * (1 - smooth((t - 15.6) / 0.5))
+            follow = 0.28 * smooth((t - 5.6) / 0.6) * (1 - smooth((t - GRID_END + 0.5) / 0.5))
             fx, fy = fx + (mx - fx) * follow, fy + (my - fy) * follow
         vw, vh = WW / z, WH / z
         x0 = max(0, min(WW - vw, fx - vw / 2))
@@ -333,12 +337,12 @@ def with_marks(img, t, at, moments=4):
 
 def opening(t):
     """ASCII alone: a turning ember of marks that bursts into a ring and sweeps off the picture."""
-    k = smooth((t - 1.3) / 0.8)
-    return W / 2, H / 2, (24 + 5 * smooth(t / 1.3)) * UNIT, 1 - min(1.0, k * 2.2), (20 + 52 * k) * UNIT if k > 0 else None, 1 - 0.4 * k
+    k = smooth((t - 0.8) / 0.7)
+    return W / 2, H / 2, (24 + 5 * smooth(t / 0.8)) * UNIT, 1 - min(1.0, k * 2.2), (20 + 52 * k) * UNIT if k > 0 else None, 1 - 0.4 * k
 
 
 def closing(t):
-    k = smooth((t - 16.2) / 0.8)
+    k = smooth((t - 12.2) / 0.8)
     return W / 2, H / 2, UNIT, 0.0, (4 + 68 * k) * UNIT, 1 - 0.4 * k
 
 
@@ -352,24 +356,24 @@ def end_card(t):
     img = with_marks(Image.new('RGB', (W, H), BG), t, lambda tj: (W / 2, 300, 9 * UNIT, 1.0), moments=2)
     d = ImageDraw.Draw(img)
     d.text((W / 2, 590), 'model-picker', font=font(f'{SANS}/AnthropicSans-Romans-Variable-25x258.ttf', 132),
-           fill=mix(BG, INK, smooth((t - 16.6) / 0.3)), anchor='mm')
+           fill=mix(BG, INK, smooth((t - 12.6) / 0.3)), anchor='mm')
     d.text((W / 2, 740), '/plugin install model-picker --marketplace nithinaru/model-picker', font=font(MONO, 30),
-           fill=mix(BG, DIM, smooth((t - 16.9) / 0.3)), anchor='mm')
+           fill=mix(BG, DIM, smooth((t - 12.9) / 0.3)), anchor='mm')
     return img
 
 
 def frame(film, t):
     # The opening: ASCII alone, already burning, which bursts into a ring that uncovers the window.
-    if t < 2.15:
-        k = smooth((t - 1.3) / 0.8)
+    if t < 1.55:
+        k = smooth((t - 0.8) / 0.7)
         img = Image.new('RGB', (W, H), BG)
         if k > 0:
             img = Image.composite(film.shot(t), img, hole((20 + 52 * k - 3) * UNIT))
         return with_marks(img, t, opening)
     img = film.shot(t)
     # The ending arrives the way the film began: a ring of ASCII sweeps out, and the card is inside it.
-    if t >= 16.2:
-        k = smooth((t - 16.2) / 0.8)
+    if t >= 12.2:
+        k = smooth((t - 12.2) / 0.8)
         if k >= 1:
             return end_card(t)
         img = with_marks(Image.composite(end_card(t), img, hole((4 + 68 * k - 3) * UNIT)), t, closing)
@@ -480,26 +484,26 @@ def build_audio(path, track):
             buf[i:i + n] += sig[:n] * gain
 
     def cr(t):
-        return max(0.0, min(1.0, (t - 5.5) / (DROP - 5.5))) ** 1.6 if t < DROP else 1.0
+        return max(0.0, min(1.0, (t - (GRID_T0 - 1.5)) / (DROP - (GRID_T0 - 1.5)))) ** 1.6 if t < DROP else 1.0
 
     # What happens on screen.
-    add(0.0, whoosh(1.3, up=True, gain=0.35))
-    add(1.3, pop(0.6, 200))
-    add(1.3, whoosh(0.85, up=False, gain=0.7))
-    add(3.6, pop(0.5, 420))
-    add(3.82, poof())
-    add(4.5, whoosh(0.5, up=False, gain=0.3))
-    add(5.3, pop(0.55, 380))
+    add(0.0, whoosh(0.8, up=True, gain=0.35))
+    add(0.8, pop(0.6, 200))
+    add(0.8, whoosh(0.85, up=False, gain=0.7))
+    add(2.3, pop(0.5, 420))
+    add(2.52, poof())
+    add(3.2, whoosh(0.5, up=False, gain=0.3))
+    add(3.6, pop(0.55, 380))
     for at in CLICKS:
         add(at, tick(), 1.3)
-    add(6.45, whoosh(0.7, up=True, gain=0.6))
+    add(4.55, whoosh(0.7, up=True, gain=0.6))
     last = ''
     for i, p in enumerate(track):
         if p['cell'] and p['cell'] != last:
             add(GRID_T0 + i / FPS, tick(), 0.8)
         last = p['cell'] or last
-    add(16.2, pop(0.6, 200))
-    add(16.2, whoosh(0.85, up=False, gain=0.7))
+    add(12.2, pop(0.6, 200))
+    add(12.2, whoosh(0.85, up=False, gain=0.7))
 
     # The music: pads under everything, a riser into the grid, drums from the grid, the drop on the fling.
     bar = 4 * BEAT
@@ -511,7 +515,7 @@ def build_audio(path, track):
             break
         if t >= 0:
             add(t, chord(chords[b % 4], bar + 0.2), 0.45 + 0.55 * cr(t))
-    add(5.5, riser(DROP - 5.5))
+    add(GRID_T0 - 1.5, riser(DROP - GRID_T0 + 1.5))
     for j in range(200):
         t = GRID_T0 - 2 * BEAT + j * BEAT / 2
         if t >= DUR - 1.6:
@@ -529,7 +533,7 @@ def build_audio(path, track):
     # A breath of near silence before the drop, and the fade at the end.
     buf[int((DROP - 0.16) * SR):int(DROP * SR)] *= 0.12
     fade = np.ones(N)
-    fi = int(16.9 * SR)
+    fi = int(13.6 * SR)
     fade[fi:] = np.linspace(1.0, 0.0, N - fi)
     buf = np.tanh(buf * fade * 1.1) * 0.85
     pcm = (buf[:int(DUR * SR)] * 32767).astype('<i2')
