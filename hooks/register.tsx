@@ -6,7 +6,8 @@ import type { Choice, Seen } from '../types'
 const PANE = 'model-picker'
 const STORE_KEY = 'choice-2'
 const KEYWORD = 'ultracode'
-const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true } as const
+// Opened by the button, so it asks for the seat above the prompt, sized to the grid.
+const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true, rows: 16 } as const
 
 // The grid's rows, in the order of the app's own model menu, older models last.
 // `max` is the last effort column the model may use; the mod API lists neither
