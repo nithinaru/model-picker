@@ -1,6 +1,8 @@
 {
   "name": "model-picker",
   "version": "0.1.0",
-  "description": "Pick the model and effort by dragging one dot across a grid",
+  "description": "Pick the model and effort level on a grid, with one dot",
+  "author": { "name": "nithinaru" },
+  "license": "MIT",
   "types": "./types/index.d.ts"
 }

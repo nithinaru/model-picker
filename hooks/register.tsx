@@ -13,7 +13,7 @@ const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true
 // The model rows, in the order of the app's own menu. `max` is the last effort
 // column the model may use; `isOlder` rows stay folded behind "More models".
 // The mod API lists neither models nor their levels, so both are kept here by
-// hand. Every id is one the Claude API's published model list carries.
+// hand. The ids of the older models follow the naming pattern and are unchecked.
 const MODELS = [
   { key: 'fable-5-2', label: 'Fable 5.2', id: 'claude-fable-5-2', family: 'fable', max: 6, isOlder: false },
   { key: 'opus-5-5', label: 'Opus 5.5', id: 'claude-opus-5-5', family: 'opus', max: 6, isOlder: false },

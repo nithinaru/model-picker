@@ -92,7 +92,8 @@ const main = async () => {
       onKey: () => () => undefined,
     }
     const ink = THEME[page] ?? {}
-    const html = draw(Grid(props, surface)).replace(/color:(text|inactive|subtle|claude)/g, (_, key: string) => `color:${ink[key]}`)
+    inks = (page === '#262624' ? INKS.dark : INKS.light) ?? {}
+    const html = draw(Grid(props, surface))
     const face = props.isMono ? `font-family:'SF Mono',Menlo,monospace;font-size:12.5px` : ''
 
     return `<section style="background:${page};padding:20px 22px 22px;border:1px solid #DEDCD1">
@@ -101,6 +102,34 @@ const main = async () => {
     </section>`
   }
   const tick = (n: number) => ({ hover: null, foot: null, tick: n })
+  // `--demo`: a strip of frames for the readme's animation, five across.
+  if (process.argv.includes('--demo')) {
+    inks = INKS.dark ?? {}
+    type Beat = { at: { row: number; col: number }; isOn?: boolean; hover?: { row: number; col: number } | null; models?: unknown; page?: number; says: string }
+    const hold = (n: number, beat: Beat) => Array.from({ length: n }, () => beat)
+    const beats: Beat[] = [
+      ...hold(4, { at: { row: 4, col: 0 }, isOn: false, says: 'Following the session. Click a cell or drag the dot.' }),
+      { at: { row: 4, col: 0 }, isOn: false, hover: { row: 3, col: 1 }, says: 'Following the session. Click a cell or drag the dot.' },
+      { at: { row: 4, col: 0 }, isOn: false, hover: { row: 1, col: 1 }, says: 'Following the session. Click a cell or drag the dot.' },
+      ...hold(6, { at: { row: 1, col: 1 }, says: 'Set. Your next prompt uses it.' }),
+      { at: { row: 1, col: 0 }, says: 'Set. Your next prompt uses it.' },
+      ...hold(6, { at: { row: 0, col: 0 }, says: 'Ultracode sends Max effort and adds the word ultracode to each prompt.' }),
+      { at: { row: 2, col: 1 }, says: 'Set. Your next prompt uses it.' },
+      ...hold(5, { at: { row: 3, col: 2 }, says: 'Last answer came from Sonnet 5.5.' }),
+      ...hold(6, { at: { row: 3, col: 1 }, models: OLDER, page: 1, says: 'Set. Your next prompt uses it.' }),
+    ]
+    const frames = beats.map((beat, i) => {
+      const props = { efforts, models: beat.models ?? MAIN, at: beat.at, isOn: beat.isOn ?? true, page: beat.page ?? 0, pages: 3, labelWidth: 11, cell: 11, isMono: false }
+      const surface = { elements: { Box: 'Box', Text: 'Text' }, state: { hover: beat.hover ?? null, foot: null, tick: i }, setState: () => undefined, post: () => undefined, every: () => () => undefined, onPointer: () => () => undefined, onKey: () => () => undefined }
+
+      return `<div style="width:560px;height:300px;box-sizing:border-box;background:#262624;padding:26px 30px;overflow:hidden;flex-shrink:0">
+        ${draw(Grid(props, surface))}<div style="color:#9C9A92;margin-top:12px">${esc(beat.says)}</div></div>`
+    })
+    console.log(`<!doctype html><meta charset="utf-8"><body style="margin:0;background:#262624;font:13px/${RH}px -apple-system,'SF Pro Text',sans-serif">
+    <div data-frames="${frames.length}" style="display:flex;flex-wrap:wrap;width:2800px">${frames.join('')}</div></body>`)
+
+    return
+  }
   const pages = [
     shot('1. Picked: Fable 5.2 at Medium, at rest (light)', {}, tick(1)),
     shot('2. Same, the next glimmer step', {}, tick(2)),
