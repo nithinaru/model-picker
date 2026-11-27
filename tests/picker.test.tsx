@@ -202,6 +202,9 @@ test('Ultracode is the last column: Max effort, and the word on the prompt', asy
 
   expect(await step()).toEqual({ model: 'claude-fable-5-2', effort: 'max' })
   expect(prompts.at(-1)).toBe('tidy the tests\n\nultracode')
+  // A background task's notice is not the person's prompt: it goes on as it came.
+  await $.prompt.submit({ text: 'render finished', wait: false, origin: { kind: 'task-notification' } })
+  expect(prompts.at(-1)).toBe('render finished')
   await ui.unmount()
 })
 

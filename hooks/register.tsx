@@ -6,6 +6,8 @@ import type { Choice, Seen, View } from '../types'
 const PANE = 'model-picker'
 const STORE_KEY = 'choice-4'
 const KEYWORD = 'ultracode'
+// Where a person's own prompt comes from: typed here, sent over Remote Control or Slack, or by the app hosting the session.
+const PERSON: ReadonlySet<string> = new Set(['composer', 'bridge', 'sdk', 'slack-ping'])
 // Opened by the button, so it asks for the seat above the prompt. The columns
 // are what a dock needs for the effort names to sit on one line.
 const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true, columns: 58, rows: 16 } as const
@@ -204,6 +206,8 @@ export const requestFor = (now: Choice, sent: { model: string; effort?: ModelEff
 const prepare = async ($: EngineInterface, e: PromptSubmitInput) => {
   const now = await read($, choice)
   if (!now.isOn || now.effort !== 'ultracode' || e.command !== undefined || e.isMeta === true) return e.text
+  // Only a prompt the person sent: not a background task's notice, a scheduled prompt or another session's message.
+  if (!PERSON.has(e.origin.kind)) return e.text
   if (e.text.toLowerCase().includes(KEYWORD)) return e.text
 
   return `${e.text}\n\n${KEYWORD}`
