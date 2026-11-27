@@ -2,7 +2,7 @@
 
 Pick Claude Code's model and effort level on a grid, with one dot.
 
-![The grid: drag the dot across models and effort levels](assets/demo.gif)
+![Dragging the dot across models and effort levels; the ember around it changes colour with the effort](assets/demo.gif)
 
 ## Install
 
@@ -17,7 +17,7 @@ Answer `y` to add the marketplace, then choose a scope.
 ## Use
 
 - Click **Pick model** above the prompt, or type `/model-picker`.
-- Drag the dot, click a cell, or use the arrow keys. Up is more effort.
+- Drag the dot anywhere on the grid and let go: it settles on the nearest cell. A click or the arrow keys work too.
 - **More models** pages to older models. **Use session model** switches the mod off.
 
 Nothing changes until you pick a cell. After that, every prompt in the session uses your pick, and the line under the grid names the model that answered.

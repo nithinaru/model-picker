@@ -8,7 +8,7 @@ const STORE_KEY = 'choice-4'
 const KEYWORD = 'ultracode'
 // Opened by the button, so it asks for the seat above the prompt. The columns
 // are what a dock needs for the effort names to sit on one line.
-const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true, columns: 60, rows: 13 } as const
+const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true, columns: 58, rows: 16 } as const
 
 // The model rows, in the order of the app's own menu. `max` is the last effort
 // column the model may use; `isOlder` rows stay folded behind "More models".
@@ -138,8 +138,51 @@ const PAGES = [
   ),
 ]
 const pageOf = (key: string | null) => Math.max(0, PAGES.findIndex(page => page.some(one => one.key === key)))
-// Effort rows, top to bottom: the most effort on top, so up means more.
-const ROWS = EFFORTS.map((one, index) => ({ key: one.key, label: one.label, index })).reverse()
+type Slot = { col: number; lead: number; width: number; label: string }
+
+/**
+ * The grid's shape for the pane it is in. The effort columns share the width
+ * right of the model names. The effort names go on one line where they clear
+ * each other, else they step down over two or three lines, each centred on its
+ * column; only a pane too narrow for that gets the short names. A pane with
+ * the height for it gets a line between model rows, so the cells are near
+ * square and the ember round.
+ */
+export const layoutFor = (bodyColumns: number, bodyRows: number, rows: number, isMono: boolean) => {
+  const inner = Math.max(0, bodyColumns - 2)
+  // A proportional face sets "Sonnet 5.5" in fewer cells than it has characters.
+  const labelWidth = isMono ? 11 : 9
+  const cell = Math.max(3, Math.min(9, Math.floor((inner - labelWidth - 3) / EFFORTS.length)))
+  // A name's box has a cell for each character, odd or even as the cell is, so both share a centre.
+  const boxOf = (name: string) => ((name.length - cell) % 2 === 0 ? name.length : name.length + 1)
+  const gutter = Math.max(0, Math.ceil((boxOf(EFFORTS.at(-1)?.label ?? '') - cell) / 2))
+  const field = labelWidth + cell * EFFORTS.length + gutter
+  const lay = (names: readonly string[], lines: number): Slot[][] | null => {
+    const head: Slot[][] = []
+    for (let line = 0; line < lines; line++) {
+      const slots: Slot[] = []
+      let x = 0
+      for (let col = line; col < names.length; col += lines) {
+        const label = names[col] ?? ''
+        const width = boxOf(label)
+        const left = labelWidth + cell * col + (cell - width) / 2
+        if (left < x || left + width > field) return null
+        slots.push({ col, lead: left - x, width, label })
+        x = left + width
+      }
+      head.push(slots)
+    }
+
+    return head
+  }
+  const full = EFFORTS.map(one => one.label)
+  const short = EFFORTS.map(one => one.short)
+  const head = lay(full, 1) ?? lay(full, 2) ?? lay(full, 3) ?? lay(short, 2) ?? lay(short, 3) ?? []
+  // The names, a blank line, the rows, a blank line and the footer; then the pane's gap and a two-line caption.
+  const pitch = bodyRows >= head.length + 1 + (PER_PAGE * 2 - 1) + 2 + 3 ? 2 : 1
+
+  return { cell, labelWidth, gutter, head, pitch, lines: head.length + 1 + (rows - 1) * pitch + 1 + 2 }
+}
 
 const open = async ($: EngineInterface) => $.ui.open(OPEN)
 
@@ -221,9 +264,9 @@ export const register: Register = on => {
       modelKey === null ? null : clampEffort(modelKey, now.isOn ? now.effort : (session.effort ?? 'default'))
     const page = Math.max(0, Math.min(PAGES.length - 1, showing.page))
     const models = PAGES[page] ?? PAGES[0] ?? []
-    // A model on another page, or one the grid has no column for, gets no dot here.
-    const col = models.findIndex(one => one.key === modelKey)
-    const at = col < 0 ? { row: -1, col: -1 } : { row: ROWS.findIndex(one => one.key === effortKey), col }
+    // A model on another page, or one the grid has no row for, gets no dot here.
+    const row = models.findIndex(one => one.key === modelKey)
+    const at = row < 0 ? { row: -1, col: -1 } : { row, col: Math.max(0, EFFORTS.findIndex(one => one.key === effortKey)) }
     const summary = now.isOn ? describe(now) : 'Using the session model'
 
     // Minimised into the side column, clicks may not arrive: show the choice at a glance.
@@ -241,9 +284,8 @@ export const register: Register = on => {
     }
 
     const { Box, Text, Client } = $.ui.resolve(e)
-    const labelWidth = 11
-    const inner = Math.max(0, e.props.bodyColumns - 2)
-    const cell = Math.max(6, Math.min(13, Math.floor((inner - labelWidth) / PER_PAGE)))
+    const isMono = e.surface === 'terminal'
+    const shape = layoutFor(e.props.bodyColumns, e.props.scroll.bodyRows, models.length, isMono)
 
     return (
       <Box flexDirection="column" paddingX={1} gap={1}>
@@ -251,18 +293,21 @@ export const register: Register = on => {
           key="grid"
           module="./grid.tsx"
           props={{
-            efforts: ROWS,
             models: models.map(one => ({ key: one.key, label: one.label, max: one.max })),
+            cols: EFFORTS.length,
+            head: shape.head,
             at,
             isOn: now.isOn,
             page,
             pages: PAGES.length,
-            labelWidth,
-            cell,
-            isMono: e.surface === 'terminal',
+            labelWidth: shape.labelWidth,
+            cell: shape.cell,
+            gutter: shape.gutter,
+            pitch: shape.pitch,
+            isMono,
           }}
-          width={labelWidth + cell * models.length}
-          height={ROWS.length + 3}
+          width={shape.labelWidth + shape.cell * EFFORTS.length + shape.gutter}
+          height={shape.lines}
         />
         <Text dimColor>{captionFor(now, showing.ran, session.model)}</Text>
       </Box>

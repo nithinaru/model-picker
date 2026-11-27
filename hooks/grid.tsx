@@ -1,80 +1,148 @@
 import type { ClientModule } from 'claude-code'
 
-// The grid: effort levels down the side (Ultracode on top), models across the
-// top, one dot. The dot's neighbourhood is an ASCII ember that flickers while
-// nobody touches it. It runs on the drawing surface with no `$`: a pick is
-// posted to the hooks module when the pointer lets go, on a click, or on a key.
+// The grid: models down the side, effort levels across the top, one dot. The
+// dot can be dragged anywhere between the cells and settles on the nearest one
+// when let go. Around it burns an ember of ASCII marks that glimmers on its
+// own, trails behind a drag, and shifts colour with the effort it is over. It
+// runs on the drawing surface with no `$`: a pick is posted to the hooks module.
 
-export type Effort = { key: string; label: string; index: number }
-export type Model = { key: string; label: string; max: number }
-export type At = { row: number; col: number }
+type Model = { key: string; label: string; max: number }
+type At = { row: number; col: number }
 type Foot = 'page' | 'reset'
+type Slot = { col: number; lead: number; width: number; label: string }
 
-export type GridProps = {
-  /** Effort rows, top to bottom; `index` is the level's place in the mod's list. */
-  efforts: readonly Effort[]
-  /** Model columns on this page, left to right. `max` is the highest effort index allowed. */
+type GridProps = {
+  /** Model rows on this page, top to bottom. `max` is the last effort column allowed. */
   models: readonly Model[]
-  /** The dot's row and column; a row of -1 when the session's model has no column here. */
+  /** How many effort columns there are. */
+  cols: number
+  /** The effort names, laid out by the hooks module over one to three lines. */
+  head: readonly (readonly Slot[])[]
+  /** The dot's row and column; a row of -1 when the session's model has no row here. */
   at: At
   isOn: boolean
   page: number
   pages: number
   labelWidth: number
   cell: number
+  /** Empty cells right of the last column, for its name to run into. */
+  gutter: number
+  /** Screen lines per model row: 2 leaves a line between rows for the ember. */
+  pitch: number
   /** True where every character is one cell wide (a terminal). */
   isMono: boolean
 }
 
 type GridState = { hover: At | null; foot: Foot | null; tick: number }
+type Point = { x: number; y: number }
+type Ink = { color: string; dim?: true; bold?: true }
+type Run = { text: string; ink: Ink; width: number }
 
-// Theme keys, so every ink follows the person's theme. No fill: the pane's own surface shows through.
+// Theme keys, so the grid's own inks follow the person's theme.
 const TEXT = 'text'
 const QUIET = 'inactive'
 const OFF = 'subtle'
-const CLAY = 'claude'
-// No theme key is violet. This one keeps 3:1 contrast on white and on the app's dark surface.
-const VIOLET = '#9488E6'
 
-// The ember: one character per cell, dimmest to brightest, in clay shades.
-const RAMP = ['.', ':', '-', '=', '+', '*', '#', '%', '@']
-const SHADE = [
-  '#6B3F30',
-  '#7E4331',
-  '#8F4C38',
-  '#A3553F',
-  '#B25C44',
-  '#C96A4D',
-  '#D97757',
-  '#E88C63',
-  '#F2A56F',
-  '#FBE0B8',
-]
-const RADIUS = 9 // how far the ember reaches, in character cells
-const ROW_STEP = 2.2 // a row is about this many characters tall
-const FLICKER = 0.16 // how far a resting ember may shift each step
-const GLIMMER_MS = 900
+// The ember's colour by effort, Default to Ultracode: cool at low effort, hot
+// at Max, violet for Ultracode. A mod cannot tell a light theme from a dark
+// one, so every colour here reads on both, and heat is told by hue with `dim`
+// and `bold`, which each theme draws its own way.
+const EDGE = ['#B0AEA5', '#8FB8EE', '#7FA6EC', '#9A93E8', '#C07FD0', '#D8688F', '#E0705A']
+const CORE = ['#8C8A82', '#4F8FDB', '#6E7FE6', '#A46CCB', '#D05E8E', '#D97757', '#8E82E6']
+const LEVELS = 10
 
-const MARKS = { desktop: { rest: '•', picked: '⬤' }, mono: { rest: '•', picked: '●' } } as const
+const ASPECT = 2.4 // a screen line is about this many characters tall
+const RADIUS = 6.2 // the ember's reach, in character widths: round on screen
+const EASE = 0.5 // how much of the way to its dot the glow glides each step
+const STEP_MS = 70 // the glide's clock; at rest the ember redraws every other step
+
+const MARKS = { rest: '•', picked: '⬤', pickedMono: '●' } as const
 const SETTLE_MS = 2000
 
 const IDLE: GridState = { hover: null, foot: null, tick: 0 }
-// A press and the moves after it reach this module before it has redrawn.
+// A press and the moves after it reach this module before it has redrawn, and
+// the clock runs between redraws: what they share lives here.
 let drag: At | null = null
 let shown: GridState = IDLE
-// The cell just posted, shown until the hooks module's props answer it.
 let pending: At | null = null
 let stopSettle: (() => void) | null = null
-let stopGlimmer: (() => void) | null = null
+let stopClock: (() => void) | null = null
+let live: { setState: (next: GridState) => void } | null = null
+// The dot in flight: where it is headed, where it has got to, and its tail.
+let target: Point | null = null
+let head: Point | null = null
+let last: Point | null = null
+let trail: (Point & { a: number })[] = []
+let beat = 0
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
+const apart = (a: Point, b: Point) => Math.hypot(a.x - b.x, (a.y - b.y) * ASPECT)
+/** A steady pseudo-random share of 1 for a cell at a moment. */
+const hash = (x: number, y: number, t: number) => {
+  let n = (Math.imul(x + 11, 374761393) + Math.imul(y + 7, 668265263) + Math.imul(t + 3, 1274126177)) | 0
+  n = Math.imul(n ^ (n >>> 13), 1103515245)
+
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296
+}
+/** A colour part of the way from one hex to another. */
+const mix = (from: string, to: string, share: number) => {
+  const part = (hex: string, at: number) => parseInt(hex.slice(at, at + 2), 16)
+  const blend = (at: number) =>
+    Math.round(part(from, at) + (part(to, at) - part(from, at)) * share)
+      .toString(16)
+      .padStart(2, '0')
+
+  return `#${blend(1)}${blend(3)}${blend(5)}`
+}
+
+/** One step of the clock: the dot glides toward where it is headed, and its tail cools. */
+const step = () => {
+  beat += 1
+  if (target === null) {
+    head = null
+    last = null
+    trail = []
+  } else if (head === null || apart(head, target) < 0.4) {
+    head = target
+  } else {
+    head = { x: head.x + (target.x - head.x) * EASE, y: head.y + (target.y - head.y) * EASE }
+  }
+  if (head !== null && last !== null && apart(head, last) > 0.4) trail = [{ ...last, a: 0.8 }, ...trail].slice(0, 10)
+  last = head
+  const isMoving = trail.length > 0 || head !== target
+  trail = trail.map(point => ({ ...point, a: point.a * 0.72 })).filter(point => point.a > 0.12)
+  if (!isMoving && beat % 2 !== 0) return
+  shown = { ...shown, tick: shown.tick + 1 }
+  live?.setState(shown)
+}
+
+/** The mark a cell of the ember wears: denser toward the dot, with rays on the way out. */
+const glyphFor = (level: number, dx: number, dy: number) => {
+  if (level <= 0) return '.'
+  if (level === 1) return ':'
+  if (level >= 8) return '#'
+  if (level === 7) return '*'
+  if (level === 6) return '+'
+  const ax = Math.abs(dx)
+  const ay = Math.abs(dy)
+  if (ay < ax * 0.45) return level >= 4 ? '=' : '-'
+  if (ax < ay * 0.45) return level >= 3 ? '|' : "'"
+  if (level === 2) return '~'
+  if (level === 5) return 'x'
+
+  return dx > 0 === dy < 0 ? '/' : '\\'
+}
 
 const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
   const { Box, Text } = surface.elements
-  const { efforts, models, labelWidth, cell, isMono } = props
-  const span = labelWidth + cell * models.length
-  const footRow = efforts.length + 2
-  const marks = isMono ? MARKS.mono : MARKS.desktop
+  const { models, cols, labelWidth, cell, pitch, isMono } = props
+  const width = cell * cols
+  const span = labelWidth + width
+  const field = span + props.gutter
+  // Screen lines: the effort names, a blank line, the models, a blank line, the footer.
+  const top = props.head.length + 1
+  const gridLines = (models.length - 1) * pitch + 1
+  const footLine = top + gridLines + 1
   const hasPages = props.pages > 1
   const pageLabel = hasPages ? (props.page + 1 < props.pages ? 'More models' : 'First models') : ''
   const pageWidth = pageLabel.length
@@ -87,60 +155,97 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     surface.setState(shown)
   }
 
-  // A new instance starts clean, and the ember starts its idle glimmer once.
-  if (surface.state === undefined) {
+  // A new instance starts clean, and starts the ember's clock once.
+  const isFirst = surface.state === undefined
+  if (isFirst) {
     drag = null
     pending = null
+    head = null
+    last = null
+    trail = []
     stopSettle?.()
     stopSettle = null
-    stopGlimmer?.()
-    stopGlimmer = surface.every(GLIMMER_MS, () => {
-      if (drag !== null || shown.hover !== null || shown.foot !== null) return
-      redraw({})
-    })
+    stopClock?.()
+    stopClock = surface.every(STEP_MS, step)
   }
+  live = surface
   shown = surface.state ?? IDLE
   const { hover, foot } = shown
 
   if (pending !== null && props.at.row === pending.row && props.at.col === pending.col) pending = null
+  // The cell that is picked, or that a drag would pick if let go now.
   const at: At = drag ?? pending ?? props.at
   const isMine = props.isOn || drag !== null || pending !== null
-
-  // A cell a model does not offer is pulled back to the last level it allows.
-  const snapTo = (row: number, col: number): At => {
-    const c = clamp(col, 0, models.length - 1)
-    const r = clamp(row, 0, efforts.length - 1)
-    const max = models[c]?.max ?? 0
-    if ((efforts[r]?.index ?? 0) <= max) return { row: r, col: c }
-    const fit = efforts.findIndex(effort => effort.index === max)
-
-    return { row: fit < 0 ? r : fit, col: c }
+  const centre = (col: number) => col * cell + Math.floor(cell / 2)
+  // At rest the dot heads for its cell; in a drag it heads for the pointer.
+  if (drag === null) target = at.row >= 0 && at.col >= 0 ? { x: centre(at.col), y: at.row * pitch } : null
+  if (isFirst || target === null) {
+    head = target
+    last = target
   }
-  const under = (x: number, y: number): At | Foot | null => {
-    const line = Math.floor(y)
-    if (line === footRow) {
+  // Where the dot is drawn: a whole cell on the way to where it is headed.
+  const dot =
+    head === null ? null : { x: clamp(Math.round(head.x), 1, width - 2), y: clamp(Math.round(head.y), 0, gridLines - 1) }
+
+  // The ember's inks, edge to core, for the effort the dot is over: between two
+  // columns they are a blend of both, so the colour shifts as the dot travels.
+  const over = head === null ? 0 : clamp((head.x - Math.floor(cell / 2)) / cell, 0, cols - 1)
+  const low = clamp(Math.floor(over), 0, EDGE.length - 1)
+  const high = clamp(low + 1, 0, EDGE.length - 1)
+  const edge = mix(EDGE[low] ?? '#000000', EDGE[high] ?? '#000000', over - low)
+  const core = mix(CORE[low] ?? '#000000', CORE[high] ?? '#000000', over - low)
+  const ramp: Ink[] = Array.from({ length: LEVELS }, (_, level) => {
+    // The session's own setting, before any pick, burns with no colour.
+    if (!isMine) return level < 3 ? { color: OFF } : level < 7 ? { color: QUIET, dim: true } : { color: QUIET }
+    const color = mix(edge, core, level / (LEVELS - 1))
+
+    return level < 3 ? { color, dim: true } : level === LEVELS - 1 ? { color, bold: true } : { color }
+  })
+
+  // A level a model does not offer is pulled back to the last one it has.
+  const snapTo = (row: number, col: number): At => {
+    const r = clamp(row, 0, models.length - 1)
+
+    return { row: r, col: clamp(col, 0, Math.min(models[r]?.max ?? 0, cols - 1)) }
+  }
+  /** The model row at a height, or -1 around them. A row owns half a pitch either side. */
+  const rowAt = (y: number, isFine: boolean) => {
+    const from = y - top
+    if (from < 0 || from >= gridLines) return -1
+
+    return clamp(Math.floor(isFine ? (from + (pitch - 1) / 2) / pitch : from / pitch), 0, models.length - 1)
+  }
+  const under = (x: number, y: number, isFine: boolean): At | Foot | null => {
+    if (Math.floor(y) === footLine) {
       if (hasPages && x >= 0 && x < pageWidth) return 'page'
       if (resetWidth > 0 && x >= span - resetWidth && x < span) return 'reset'
 
       return null
     }
-    const row = line - 1
-    if (row < 0 || row >= efforts.length || x < 0 || x >= span) return null
-    // An effort name keeps the model column the dot is in.
+    const row = rowAt(y, isFine)
+    if (row < 0 || x < 0 || x >= span) return null
+    // A model's name keeps the effort column the dot is in.
     const col = x < labelWidth ? Math.max(0, at.col) : Math.floor((x - labelWidth) / cell)
 
     return snapTo(row, col)
   }
-  const nearest = (x: number, y: number): At => snapTo(Math.floor(y) - 1, Math.floor((x - labelWidth) / cell))
+  /** Where the pointer is inside the dots' area, kept within it, and the cell nearest to that. */
+  const grab = (x: number, y: number, isFine: boolean) => {
+    const point = {
+      x: clamp(Math.floor(x) - labelWidth, 1, width - 2),
+      y: clamp(isFine ? Math.round(y - 0.5) - top : Math.floor(y) - top, 0, gridLines - 1),
+    }
+
+    return { point, cell: snapTo(Math.round(point.y / pitch), Math.floor(point.x / cell)) }
+  }
 
   const pick = (to: At) => {
-    const model = models[to.col]
-    const effort = efforts[to.row]
-    if (model === undefined || effort === undefined) return
+    const model = models[to.row]
+    if (model === undefined) return
     const isSame = props.isOn && to.row === props.at.row && to.col === props.at.col
     if (isSame && pending === null) return
     pending = to
-    surface.post({ model: model.key, col: effort.index })
+    surface.post({ model: model.key, col: to.col })
     stopSettle?.()
     stopSettle = surface.every(SETTLE_MS, () => {
       stopSettle?.()
@@ -159,6 +264,11 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
     pending = null
     surface.post({ reset: true })
   }
+  /** The dot follows the pointer: at once when it is close, by a glide when it is far. */
+  const follow = (point: Point) => {
+    target = point
+    if (head === null || apart(head, point) <= 5) head = point
+  }
 
   surface.onPointer(e => {
     if (e.type === 'enter') return
@@ -171,43 +281,54 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
       if (drag === null) return
       const to = drag
       drag = null
+      // Let go: the dot settles on the nearest cell it may sit in.
+      target = { x: centre(to.col), y: to.row * pitch }
       pick(to)
       redraw({ hover: null, foot: null })
 
       return
     }
+    const isFine = e.fine !== undefined
     const x = e.fine?.x ?? e.x
     const y = e.fine?.y ?? e.y
     // A move with no button held means the release was missed: the press is over.
     if (drag !== null && e.type === 'move' && e.button === undefined) drag = null
     if (drag !== null && e.type === 'move') {
-      const to = nearest(x, y)
-      if (drag.row !== to.row || drag.col !== to.col) {
-        drag = to
-        redraw({ hover: null, foot: null })
-      }
+      const held = grab(x, y, isFine)
+      drag = held.cell
+      follow(held.point)
+      redraw({ hover: null, foot: null })
 
       return
     }
     if (e.type === 'move' && e.button !== undefined) return
-    const target = under(x, y)
+    const hit = under(x, y, isFine)
     if (e.type === 'down') {
       if (e.button !== undefined && e.button !== 'left') return
-      if (typeof target === 'string') {
-        press(target)
+      if (typeof hit === 'string') {
+        press(hit)
         redraw({ hover: null, foot: null })
 
         return
       }
-      if (target === null) return
-      drag = target
+      if (hit === null) return
+      if (x < labelWidth) {
+        // A model's name is a plain pick: there is nothing to drag there.
+        pick(hit)
+        redraw({ hover: null, foot: null })
+
+        return
+      }
+      const held = grab(x, y, isFine)
+      drag = held.cell
+      follow(held.point)
       redraw({ hover: null, foot: null })
 
       return
     }
     // The cell a press here would land on lights; footer controls light by name.
-    const nextFoot = typeof target === 'string' ? target : null
-    const nextHover = target !== null && typeof target !== 'string' ? target : null
+    const nextFoot = typeof hit === 'string' ? hit : null
+    const nextHover = hit !== null && typeof hit !== 'string' ? hit : null
     if (hover?.row !== nextHover?.row || hover?.col !== nextHover?.col || foot !== nextFoot) {
       redraw({ hover: nextHover, foot: nextFoot })
     }
@@ -220,92 +341,124 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
 
       return
     }
-    const step: Record<string, At> = {
+    const to = {
       left: snapTo(at.row, at.col - 1),
       right: snapTo(at.row, at.col + 1),
       up: snapTo(at.row - 1, at.col),
       down: snapTo(at.row + 1, at.col),
-    }
-    const to = step[e.key]
+    }[e.key]
     if (to === undefined || (to.row === at.row && to.col === at.col)) return
     pick(to)
     redraw({ hover: null })
   })
 
-  const centre = (c: number) => c * cell + Math.floor(cell / 2)
-  // How much the ember reaches a character cell: 1 on the dot, 0 past its radius.
-  const glow = (r: number, x: number) => {
-    if (at.row < 0 || at.col < 0) return 0
-    const d = Math.hypot(x - centre(at.col), (r - at.row) * ROW_STEP)
+  /** How hot a cell is, 0 to 1: the glow where the dot has got to, and the tail behind it. */
+  const heat = (x: number, y: number) => {
+    if (head === null) return 0
+    let most = Math.max(0, 1 - apart(head, { x, y }) / RADIUS)
+    for (const point of trail) most = Math.max(most, point.a * Math.max(0, 1 - apart(point, { x, y }) / (RADIUS * 0.8)))
 
-    return Math.max(0, 1 - d / RADIUS) ** 1.25
+    return most
   }
-  // Each step shifts a resting ember a little, from a pattern of cell and tick.
-  // The cells next to the dot hold still, so the dot never seems to move.
-  const flicker = (r: number, x: number, g: number) =>
-    g > 0.7 ? 0 : ((((r * 7 + x * 13 + shown.tick * 5) % 11) / 11) - 0.5) * FLICKER
-  const shade = (v: number) => SHADE[clamp(Math.floor(v * SHADE.length), 0, SHADE.length - 1)] ?? CLAY
-  type Run = { text: string; color: string; width: number }
-  /** One effort row as runs of same-ink characters: the dots, and the ember between them. */
-  const line = (r: number): Run[] => {
-    const effort = efforts[r]
+  /** One cell of the ember, or null where it does not reach. */
+  const ember = (x: number, y: number): { text: string; ink: Ink } | null => {
+    const origin = head
+    const hot = heat(x, y)
+    if (origin === null || hot <= 0.07) return null
+    const level = Math.min(LEVELS - 1, Math.floor(hot * LEVELS))
+    const dx = x - origin.x
+    const dy = (y - origin.y) * ASPECT
+    // Colour moves every step: a ripple running outward, and now and then a spark.
+    const ripple = level >= LEVELS - 2 ? 0 : Math.round(1.3 * Math.sin(Math.hypot(dx, dy) * 1.15 - shown.tick * 0.9))
+    const isSpark = level < LEVELS - 3 && hash(x, y, shown.tick) < 0.04
+    const ink = ramp[isSpark ? LEVELS - 1 : clamp(level + ripple, 0, LEVELS - 1)] ?? { color: QUIET }
+    // The mark itself changes only now and then, and only by a step.
+    const turn = hash(x, y, Math.floor(shown.tick / 6))
+    const text = glyphFor(clamp(level + (turn < 0.14 ? -1 : turn > 0.86 ? 1 : 0), 0, LEVELS - 1), dx, dy)
+
+    return { text, ink }
+  }
+  /** One screen line of the dots' area as runs: the dots, the ember between them, and the gaps. */
+  const lineOf = (y: number): Run[] => {
+    const row = y >= 0 && y < gridLines && y % pitch === 0 ? y / pitch : -1
+    const model = row < 0 ? undefined : models[row]
     const runs: Run[] = []
-    const push = (text: string, color: string) => {
-      const last = runs.at(-1)
-      if (last !== undefined && text === ' ' && last.text.trim() === '') last.width += 1
-      else runs.push({ text, color, width: 1 })
+    const gap = () => {
+      const before = runs.at(-1)
+      if (before !== undefined && before.text === '') before.width += 1
+      else runs.push({ text: '', ink: { color: OFF }, width: 1 })
     }
-    for (let x = 0; x < cell * models.length; x++) {
-      const c = Math.floor(x / cell)
-      const model = models[c]
-      const isDot = x === centre(c)
-      const g = isMine ? glow(r, x) : 0
-      const v = g > 0.04 ? g + flicker(r, x, g) : 0
-      if (isDot && effort !== undefined && model !== undefined) {
-        if (r === at.row && c === at.col) {
-          push(marks.picked, !isMine ? QUIET : effort.key === 'ultracode' ? VIOLET : CLAY)
-        } else if (effort.index > model.max) push(marks.rest, OFF)
-        else if (v > 0.12) push(marks.rest, shade(Math.min(1, v + 0.2)))
-        else push(marks.rest, hover !== null && hover.row === r && hover.col === c ? TEXT : QUIET)
-      } else if (v > 0.12) {
-        push(RAMP[clamp(Math.floor(v * RAMP.length), 0, RAMP.length - 1)] ?? '.', shade(v))
-      } else push(' ', OFF)
+    for (let x = 0; x < width; x++) {
+      // The dot itself is large: it takes the cell either side of its own, and nothing else goes there.
+      if (dot !== null && y === dot.y && x === dot.x - 1) {
+        runs.push({
+          text: isMono ? MARKS.pickedMono : MARKS.picked,
+          ink: { color: isMine ? core : QUIET },
+          width: 3,
+        })
+        x += 2
+        continue
+      }
+      const col = Math.floor(x / cell)
+      const glow = ember(x, y)
+      if (model !== undefined && x === centre(col)) {
+        const isLit = (drag ?? hover)?.row === row && (drag ?? hover)?.col === col
+        const ink: Ink =
+          col > model.max ? { color: OFF } : isLit ? { color: TEXT } : glow !== null ? { color: glow.ink.color } : { color: QUIET }
+        runs.push({ text: MARKS.rest, ink, width: 1 })
+      } else if (glow !== null) {
+        runs.push({ text: glow.text, ink: glow.ink, width: 1 })
+      } else gap()
     }
 
     return runs
   }
 
   return (
-    <Box flexDirection="column" width={span}>
-      <Box flexDirection="row" height={1}>
-        <Box width={labelWidth}>
-          <Text italic color={QUIET} wrap="clip">
-            Effort
-          </Text>
-        </Box>
-        {models.map((model, c) => (
-          <Box width={cell} justifyContent="center">
-            <Text bold={c === at.col} color={c === at.col || hover?.col === c ? TEXT : QUIET} wrap="clip">
-              {model.label}
-            </Text>
-          </Box>
-        ))}
-      </Box>
-      {efforts.map((effort, r) => (
-        <Box flexDirection="row" height={1}>
-          <Box width={labelWidth}>
-            <Text bold={r === at.row} color={r === at.row || hover?.row === r ? TEXT : QUIET} wrap="clip">
-              {effort.label}
-            </Text>
-          </Box>
-          {line(r).map(run => (
-            <Box width={run.width} justifyContent="center">
-              {run.text === ' ' ? null : <Text color={run.color}>{run.text}</Text>}
-            </Box>
-          ))}
+    <Box flexDirection="column" width={field}>
+      {props.head.map(slots => (
+        <Box flexDirection="row" height={1} width={field}>
+          {slots.flatMap(slot => [
+            <Box width={slot.lead} />,
+            <Box width={slot.width} justifyContent="center">
+              <Text
+                bold={slot.col === at.col}
+                color={slot.col === at.col || hover?.col === slot.col ? TEXT : QUIET}
+                wrap="clip"
+              >
+                {slot.label}
+              </Text>
+            </Box>,
+          ])}
         </Box>
       ))}
-      <Box height={1} />
+      {Array.from({ length: gridLines + 2 }, (_, line) => {
+        // One line above the first row and one below the last hold only the ember.
+        const y = line - 1
+        const row = y >= 0 && y < gridLines && y % pitch === 0 ? y / pitch : -1
+        const model = row < 0 ? undefined : models[row]
+
+        return (
+          <Box flexDirection="row" height={1}>
+            <Box width={labelWidth}>
+              {model === undefined ? null : (
+                <Text bold={row === at.row} color={row === at.row || hover?.row === row ? TEXT : QUIET} wrap="clip">
+                  {model.label}
+                </Text>
+              )}
+            </Box>
+            {lineOf(y).map(run => (
+              <Box width={run.width} justifyContent="center">
+                {run.text === '' ? null : (
+                  <Text color={run.ink.color} dimColor={run.ink.dim === true} bold={run.ink.bold === true} wrap="clip">
+                    {run.text}
+                  </Text>
+                )}
+              </Box>
+            ))}
+          </Box>
+        )
+      })}
       <Box flexDirection="row" height={1} width={span} justifyContent="space-between">
         {hasPages ? (
           <Box width={pageWidth}>
