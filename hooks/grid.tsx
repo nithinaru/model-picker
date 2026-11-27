@@ -54,8 +54,7 @@ const LEVELS = 10
 
 const ASPECT = 2.4 // a screen line is about this many characters tall
 const RADIUS = 5.4 // the ember's reach at rest, in character widths: round on screen
-const SWELL = 0.8 // stretch along the way it moves: an oval, not a circle
-const STRETCH = 0.55 // how much further it reaches at full speed, as a share of RADIUS
+const TAIL = 1.3 // how much longer the ember trails behind a moving dot, as a share of RADIUS
 const EASE = 0.5 // how much of the way to its dot the glow glides each step
 const STEP_MS = 70 // the glide's clock; at rest the ember redraws every other step
 
@@ -372,21 +371,23 @@ const Grid: ClientModule<GridProps, GridState> = (props, surface) => {
   /** How hot a cell is, 0 to 1: the glow where the dot has got to, and the tail behind it. */
   const heat = (x: number, y: number) => {
     if (head === null) return 0
-    const reach = RADIUS * (1 + SWELL * energy)
-    // Distance that is longer across the way of travel than along it, so the
-    // ember stretches into an oval, leaning ahead of the dot as it moves.
-    const oval = (from: Point, at: number) => {
+    // The ember keeps its size across the way of travel. Along it, it grows a
+    // tail behind the dot and stays short ahead, so it follows the dot instead
+    // of swelling around it.
+    const shape = (from: Point, at: number) => {
       const dx = x - from.x
       const dy = (y - from.y) * ASPECT
-      const along = heading === null ? 0 : dx * heading.x + dy * heading.y
-      const across = heading === null ? Math.hypot(dx, dy) : Math.abs(-dx * heading.y + dy * heading.x)
-      const stretch = 1 + STRETCH * energy
-      const d = heading === null ? Math.hypot(dx, dy) : Math.hypot(along / stretch, across)
+      if (heading === null || energy === 0) return Math.max(0, 1 - Math.hypot(dx, dy) / (RADIUS * at))
+      const along = dx * heading.x + dy * heading.y
+      const across = -dx * heading.y + dy * heading.x
+      const length = along < 0 ? RADIUS * (1 + TAIL * energy) : RADIUS * (1 - 0.12 * energy)
+      const width = RADIUS * (1 - 0.12 * energy)
 
-      return Math.max(0, 1 - d / (reach * at))
+      return Math.max(0, 1 - Math.hypot(along / length, across / width) * (RADIUS / (RADIUS * at)))
     }
-    let most = oval(head, 1)
-    for (const point of trail) most = Math.max(most, point.a * oval(point, 0.8))
+    let most = shape(head, 1)
+    for (const point of trail) most = Math.max(most, point.a * shape(point, 0.7))
+
     return most
   }
   /** One cell of the ember, or null where it does not reach. */
