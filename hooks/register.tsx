@@ -6,6 +6,7 @@ import type { Choice, Seen } from '../types'
 const PANE = 'model-picker'
 const STORE_KEY = 'choice-2'
 const KEYWORD = 'ultracode'
+const OPEN = { id: PANE, title: 'Model picker', focus: true, closeOnEscape: true } as const
 
 // The grid's rows, in the order of the app's own model menu, older models last.
 // `max` is the last effort column the model may use; the mod API lists neither
@@ -148,10 +149,7 @@ export const register: Register = on => {
       description: 'Pick the model and effort by dragging a dot across a grid',
     })
     const kept = await $.store.get(STORE_KEY)
-    if (isChoice(kept)) {
-      await update($, choice, () => kept)
-      if (kept.isOn) $.ui.status(describe(kept))
-    }
+    if (isChoice(kept)) await update($, choice, () => kept)
     const model = await $.session.model().catch(() => null)
     if (model !== null) await update($, seen, was => ({ ...was, model }))
 
@@ -159,14 +157,28 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'model-picker' }, async $ => {
-    const opened = await $.ui.open({
-      id: PANE,
-      title: 'Model picker',
-      focus: true,
-      closeOnEscape: true,
-    })
+    const opened = await $.ui.open(OPEN)
 
     return { text: opened.isPlaced ? 'Model picker opened.' : `Model picker: ${opened.reason}` }
+  })
+
+  // The way in: one button above the prompt that names the choice and opens
+  // the grid, or closes it when it is already showing.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const now = await read($, choice)
+    const { Box, Button } = $.ui.resolve(e)
+    const toggle = async () => {
+      const shown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown)
+      if (shown) await $.ui.close({ id: PANE })
+      else await $.ui.open(OPEN)
+    }
+
+    return (
+      <Box>
+        <Button key="open" label={now.isOn ? describe(now) : 'Pick model'} onPress={toggle} />
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -244,7 +256,6 @@ export const register: Register = on => {
       isOn: true,
     }))
     await $.store.set(STORE_KEY, to)
-    $.ui.status(describe(to))
 
     return {}
   })
